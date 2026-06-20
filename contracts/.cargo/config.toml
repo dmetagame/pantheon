@@ -1,0 +1,9 @@
+# Casper Testnet's WASM interpreter does not support the bulk-memory
+# proposal. Recent Rust nightlies enable it by default for wasm32 —
+# disable it here so Odra contracts deploy successfully.
+[target.wasm32-unknown-unknown]
+rustflags = [
+  "-C", "target-feature=-bulk-memory",
+  "-C", "target-feature=-sign-ext",
+  "-C", "link-arg=--export-table",
+]

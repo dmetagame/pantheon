@@ -1,0 +1,26 @@
+node_modules
+.next
+.vercel
+out
+dist
+build
+target
+wasm
+*.wasm
+
+.env
+.env.local
+.env.*.local
+!.env.example
+
+.DS_Store
+*.log
+.turbo
+.pnpm-store
+
+.vscode
+.idea
+
+# TS build cache
+*.tsbuildinfo
+next-env.d.ts

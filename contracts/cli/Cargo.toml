@@ -1,0 +1,15 @@
+[package]
+edition = "2021"
+name = "pantheon-cli"
+version = "0.1.0"
+
+[dependencies]
+prophecy = { path = "../prophecy" }
+priest_quorum = { path = "../priest_quorum" }
+reputation = { path = "../reputation" }
+odra = { workspace = true }
+odra-cli = { workspace = true }
+
+[[bin]]
+name = "pantheon_cli"
+path = "cli.rs"

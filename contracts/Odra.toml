@@ -1,0 +1,8 @@
+[[contracts]]
+fqn = "prophecy::prophecy::ProphecyRegistry"
+
+[[contracts]]
+fqn = "reputation::reputation::Reputation"
+
+[[contracts]]
+fqn = "priest_quorum::priest_quorum::PriestQuorum"

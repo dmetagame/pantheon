@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+@theme {
+  --color-marble: #f5f1e6;
+  --color-ink: #1a1410;
+  --color-gold: #c9a45e;
+  --color-laurel: #4a5d3a;
+  --color-amphora: #8a5a3b;
+  --font-display: "Cormorant Garamond", "Georgia", serif;
+  --font-body: "Inter", system-ui, sans-serif;
+}
+
+body {
+  font-family: var(--font-body);
+  background-image: radial-gradient(
+    circle at 30% 20%,
+    rgba(201, 164, 94, 0.06),
+    transparent 60%
+  );
+}

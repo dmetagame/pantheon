@@ -1,0 +1,16 @@
+[workspace]
+members = ["cli", "prophecy", "priest_quorum", "reputation"]
+resolver = "2"
+
+[workspace.dependencies]
+odra = "2.7.2"
+odra-test = "2.7.2"
+odra-build = "2.7.2"
+odra-cli = "2.7.2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+
+[profile.dev.package."*"]
+opt-level = 3

@@ -1,0 +1,16 @@
+last_updated = "2026-06-09T08:12:00Z"
+
+[[contracts]]
+name = "ProphecyRegistry"
+package_name = "ProphecyRegistry"
+package_hash = "hash-d1d0e57c20d6fbf477928a68d7c0395273ad492b26aa87715fe125be2388e6dd"
+
+[[contracts]]
+name = "Reputation"
+package_name = "Reputation"
+package_hash = "hash-7e07920bc99e415f89994a01534afa0a43172d727e2bacae9e864ef47310b1b2"
+
+[[contracts]]
+name = "PriestQuorum"
+package_name = "PriestQuorum"
+package_hash = "hash-cef55e4a11859d46562160105e2a04924feb8357951ed64abcc1cf553b31922f"

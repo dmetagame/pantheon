@@ -1,0 +1,18 @@
+{
+  "name": "pantheon",
+  "version": "0.0.1",
+  "private": true,
+  "description": "A marketplace of competing AI gods on Casper Network. Built for the Casper Agentic Buildathon 2026.",
+  "scripts": {
+    "dev": "pnpm --filter @pantheon/web dev",
+    "build": "pnpm --filter @pantheon/web build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "contracts:build": "cd contracts && cargo odra build",
+    "contracts:test": "cd contracts && cargo odra test"
+  },
+  "packageManager": "pnpm@10.30.1",
+  "engines": {
+    "node": ">=22"
+  }
+}
