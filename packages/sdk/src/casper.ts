@@ -14,6 +14,7 @@ const {
   CLValue,
   ContractCallBuilder,
   HttpHandler,
+  KeyTypeID,
   PrivateKey,
   RpcClient,
 } = casperSdk;
@@ -111,6 +112,97 @@ export async function publishOnChain(p: PublishParams): Promise<string> {
     (b) => b.byPackageHash(hash).entryPoint("publish").runtimeArgs(args),
     3_500_000_000,
   );
+}
+
+// CES on Casper-2/Odra writes each event to the `__events` dictionary as a
+// CLValue::Any whose payload contains the bytesrepr-encoded event name (Odra
+// prepends `event_` to the Rust struct name) followed by the fields in
+// declaration order. We scan for the literal marker
+// "[23 LE]event_ProphecyPublished" — once found, the next 8 bytes are the
+// `id: u64` field little-endian.
+const PROPHECY_PUBLISHED_NAME = "event_ProphecyPublished";
+const PROPHECY_PUBLISHED_MARKER: Uint8Array = (() => {
+  const name = new TextEncoder().encode(PROPHECY_PUBLISHED_NAME);
+  const out = new Uint8Array(4 + name.length);
+  new DataView(out.buffer).setUint32(0, name.length, true);
+  out.set(name, 4);
+  return out;
+})();
+
+function findSubarray(haystack: Uint8Array, needle: Uint8Array): number {
+  if (needle.length === 0 || haystack.length < needle.length) return -1;
+  outer: for (let i = 0; i <= haystack.length - needle.length; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) continue outer;
+    }
+    return i;
+  }
+  return -1;
+}
+
+function readU64LE(buf: Uint8Array, offset: number): bigint {
+  let id = 0n;
+  for (let i = 0; i < 8; i++) {
+    id |= BigInt(buf[offset + i]) << BigInt(8 * i);
+  }
+  return id;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Poll until the publish tx is finalized, then scan its dictionary writes for
+ * the ProphecyPublished event and return the assigned on-chain id.
+ */
+export async function confirmPublishedId(
+  txHash: string,
+  timeoutMs = 120_000,
+): Promise<bigint> {
+  const { client } = loadAdmin();
+  const deadline = Date.now() + timeoutMs;
+
+  let executionInfo: { executionResult: { errorMessage?: string; effects: unknown[] } } | undefined;
+  while (Date.now() < deadline) {
+    try {
+      const res = await client.getTransactionByTransactionHash(txHash);
+      if (res.executionInfo) {
+        executionInfo = res.executionInfo as typeof executionInfo;
+        break;
+      }
+    } catch {
+      // Tx not yet indexed by the node — keep polling.
+    }
+    await sleep(3_000);
+  }
+  if (!executionInfo) {
+    throw new Error(`Tx ${txHash} not finalized within ${timeoutMs}ms`);
+  }
+  const err = executionInfo.executionResult.errorMessage;
+  if (err) {
+    throw new Error(`Tx ${txHash} reverted: ${err}`);
+  }
+
+  for (const t of executionInfo.executionResult.effects as Array<{
+    key: { type: number };
+    kind: { isWriteCLValue: () => boolean; parseAsWriteCLValue: () => CLValue };
+  }>) {
+    if (t.key.type !== KeyTypeID.Dictionary) continue;
+    if (!t.kind.isWriteCLValue()) continue;
+    let raw: Uint8Array;
+    try {
+      raw = t.kind.parseAsWriteCLValue().bytes();
+    } catch {
+      continue;
+    }
+    const idx = findSubarray(raw, PROPHECY_PUBLISHED_MARKER);
+    if (idx < 0) continue;
+    const idOffset = idx + PROPHECY_PUBLISHED_MARKER.length;
+    if (idOffset + 8 > raw.length) continue;
+    return readU64LE(raw, idOffset);
+  }
+  throw new Error(`ProphecyPublished event not found in tx ${txHash}`);
 }
 
 export interface SettleParams {

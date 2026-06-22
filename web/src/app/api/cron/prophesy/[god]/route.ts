@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { GODS, prophesy, type GodId } from "@pantheon/agents";
-import { publishOnChain } from "@pantheon/sdk";
+import { confirmPublishedId, publishOnChain } from "@pantheon/sdk";
 import sql from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -43,11 +43,23 @@ export async function GET(
     oracleSource,
   });
 
+  // Wait for finalization and recover the on-chain id from the
+  // ProphecyPublished event so /settle can call the registry. If the node is
+  // slow we still persist the row — a sweeper can backfill on_chain_id later.
+  let onChainId: bigint | null = null;
+  let confirmError: string | null = null;
+  try {
+    onChainId = await confirmPublishedId(txHash);
+  } catch (e) {
+    confirmError = e instanceof Error ? e.message : String(e);
+  }
+
   const [row] = await sql`
     INSERT INTO prophecies
-      (god_id, tx_hash, question, claim, confidence_bp, reasoning, oracle_source, settles_at)
+      (god_id, on_chain_id, tx_hash, question, claim, confidence_bp, reasoning, oracle_source, settles_at)
     VALUES (
       ${p.godId},
+      ${onChainId === null ? null : onChainId.toString()},
       ${txHash},
       ${p.question},
       ${p.claim === "yes"},
@@ -56,14 +68,16 @@ export async function GET(
       ${oracleSource},
       ${settlesAt}
     )
-    RETURNING id, settles_at;
+    RETURNING id, on_chain_id, settles_at;
   `;
 
   return NextResponse.json({
     ok: true,
     id: row.id,
+    onChainId: row.on_chain_id,
     godId,
     txHash,
+    confirmError,
     question: p.question,
     settlesAt: row.settles_at,
   });

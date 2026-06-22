@@ -2,6 +2,7 @@ export const PANTHEON_NETWORK = "casper-test" as const;
 
 export {
   publishOnChain,
+  confirmPublishedId,
   settleOnChain,
   recordOutcomeOnChain,
 } from "./casper";
