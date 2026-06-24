@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
-import { GODS, prophesy, type GodId } from "@pantheon/agents";
+import { GODS, getBrief, prophesy, type GodId } from "@pantheon/agents";
 import { confirmPublishedId, publishOnChain } from "@pantheon/sdk";
 import sql from "@/lib/db";
 
@@ -88,15 +88,3 @@ function isAuthorized(req: Request): boolean {
   return auth === `Bearer ${process.env.CRON_SECRET ?? ""}`;
 }
 
-async function getBrief(godId: GodId): Promise<string> {
-  // TODO Day 11-13: pull live data per god (CSPR.cloud TVL, Pyth, T-bill yield).
-  const briefs: Record<GodId, string> = {
-    demeter: `Casper DeFi TVL stands at $42M, +3% over 24h. Largest pool: USDC-CSPR at $8.2M.
-Stablecoin yields range 4–9% APY. Two new liquidity pools launched in the last 48h.`,
-    hermes: `BTC: $98,400 (-1.2% 24h). ETH: $3,820 (+0.8% 24h).
-Funding rates neutral across major perps. Open interest stable. ETF flows mildly positive.`,
-    apollo: `US 10Y yield: 4.31%. Tokenized T-bill flows: $12B AUM across major issuers.
-Casper RWA index up 2.1% this week. Macro: CPI prints Thursday.`,
-  };
-  return briefs[godId];
-}
