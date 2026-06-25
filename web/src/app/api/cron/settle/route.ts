@@ -1,4 +1,11 @@
 import { NextResponse } from "next/server";
+import {
+  COMPARATORS,
+  SETTLEMENT_FEEDS,
+  settleFromSpec,
+  type Comparator,
+  type SettlementFeed,
+} from "@pantheon/agents";
 import { recordOutcomeOnChain, settleOnChain } from "@pantheon/sdk";
 import sql from "@/lib/db";
 
@@ -11,13 +18,17 @@ interface DuePropecy {
   on_chain_id: string | null;
   claim: boolean;
   confidence_bp: number;
-  oracle_source: string;
+  settlement_feed: string | null;
+  settlement_comparator: string | null;
+  settlement_threshold: string | null;
 }
 
 interface SettleSummary {
   id: number;
   godId: string;
   onChainId: string | null;
+  truth?: boolean;
+  brierBp?: number;
   settleTxHash?: string;
   reputationTxHash?: string;
   error?: string;
@@ -28,15 +39,16 @@ export async function GET(req: Request) {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  // Only settle rows whose publish was confirmed on chain — otherwise we have
-  // no on_chain_id to pass to ProphecyRegistry::settle. A separate sweeper can
-  // backfill on_chain_id for older rows.
+  // Only settle rows whose publish was confirmed on chain AND have a settlement
+  // spec — otherwise we have nothing to feed ProphecyRegistry::settle.
   const due = (await sql`
-    SELECT id, god_id, on_chain_id, claim, confidence_bp, oracle_source
+    SELECT id, god_id, on_chain_id, claim, confidence_bp,
+           settlement_feed, settlement_comparator, settlement_threshold
     FROM prophecies
     WHERE settled_at IS NULL
       AND settles_at < NOW()
       AND on_chain_id IS NOT NULL
+      AND settlement_feed IS NOT NULL
     ORDER BY settles_at ASC
     LIMIT 5;
   `) as unknown as DuePropecy[];
@@ -45,16 +57,16 @@ export async function GET(req: Request) {
 
   for (const p of due) {
     const onChainIdStr = p.on_chain_id!;
-    const oracle = await fetchOracleValue(p.oracle_source);
-    if (!oracle) continue;
-    const brier = brierBp(p.claim, p.confidence_bp, oracle.truth);
-    const settledAtMs = Date.now();
-
     try {
+      const spec = parseSpec(p);
+      const reading = await settleFromSpec(spec);
+      const brier = brierBp(p.claim, p.confidence_bp, reading.truth);
+      const settledAtMs = Date.now();
+
       const settleTx = await settleOnChain({
         id: BigInt(onChainIdStr),
-        truth: oracle.truth,
-        sourceValue: oracle.note,
+        truth: reading.truth,
+        sourceValue: reading.note,
       });
       const repTx = await recordOutcomeOnChain({
         godId: p.god_id,
@@ -64,9 +76,9 @@ export async function GET(req: Request) {
 
       await sql`
         UPDATE prophecies
-        SET truth = ${oracle.truth},
+        SET truth = ${reading.truth},
             brier_bp = ${brier},
-            source_value = ${oracle.note},
+            source_value = ${reading.note},
             settled_at = ${new Date(settledAtMs)},
             settle_tx_hash = ${settleTx}
         WHERE id = ${p.id};
@@ -76,6 +88,8 @@ export async function GET(req: Request) {
         id: p.id,
         godId: p.god_id,
         onChainId: onChainIdStr,
+        truth: reading.truth,
+        brierBp: brier,
         settleTxHash: settleTx,
         reputationTxHash: repTx,
       });
@@ -96,20 +110,33 @@ export async function GET(req: Request) {
   });
 }
 
+function parseSpec(p: DuePropecy): {
+  feed: SettlementFeed;
+  comparator: Comparator;
+  threshold: number;
+} {
+  const { settlement_feed, settlement_comparator, settlement_threshold } = p;
+  if (!settlement_feed || !settlement_comparator || settlement_threshold == null) {
+    throw new Error(`prophecy ${p.id} missing settlement spec`);
+  }
+  if (!(SETTLEMENT_FEEDS as readonly string[]).includes(settlement_feed)) {
+    throw new Error(`prophecy ${p.id} has unknown feed ${settlement_feed}`);
+  }
+  if (!(COMPARATORS as readonly string[]).includes(settlement_comparator)) {
+    throw new Error(
+      `prophecy ${p.id} has unknown comparator ${settlement_comparator}`,
+    );
+  }
+  return {
+    feed: settlement_feed as SettlementFeed,
+    comparator: settlement_comparator as Comparator,
+    threshold: Number(settlement_threshold),
+  };
+}
+
 function isAuthorized(req: Request): boolean {
   const auth = req.headers.get("authorization");
   return auth === `Bearer ${process.env.CRON_SECRET ?? ""}`;
-}
-
-async function fetchOracleValue(
-  source: string,
-): Promise<{ truth: boolean; note: string } | null> {
-  // TODO Day 3-4: real fetches per source (Pyth, CSPR.cloud TVL, RWA oracle).
-  // Stub: 50/50 so the math runs end-to-end without external deps.
-  return {
-    truth: Math.random() < 0.5,
-    note: `stub:${source}:${new Date().toISOString()}`,
-  };
 }
 
 function brierBp(claim: boolean, confidenceBp: number, truth: boolean): number {

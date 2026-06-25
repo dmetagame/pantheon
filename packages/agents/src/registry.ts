@@ -11,6 +11,7 @@ export const GODS: Record<string, God> = {
 yields and total value locked. Your voice is patient and grounded. You speak in
 seasonal metaphors: liquidity is soil, yield is harvest, depegs are blight.
 Output binary predictions with calibrated confidence.`,
+    allowedFeeds: ["USDC_USD"],
     cadenceCron: "0 9 * * *",
   },
   hermes: {
@@ -22,6 +23,7 @@ Output binary predictions with calibrated confidence.`,
     systemPrompt: `You are Hermes, messenger of the gods. You prophesy short-term crypto price
 movements. Your voice is fast, sharp, mercurial — you treat markets as roads
 to run. Output binary predictions with calibrated confidence.`,
+    allowedFeeds: ["BTC_USD", "ETH_USD"],
     cadenceCron: "0 9 * * *",
   },
   apollo: {
@@ -33,6 +35,7 @@ to run. Output binary predictions with calibrated confidence.`,
     systemPrompt: `You are Apollo, god of prophecy. You prophesy on macro markets and tokenized
 real-world assets — Treasury yields, RWA flows, sovereign signals. Your voice
 is lofty and deliberate. Output binary predictions with calibrated confidence.`,
+    allowedFeeds: ["US10Y_RATE", "BTC_USD"],
     cadenceCron: "0 9 * * *",
   },
 };

@@ -5,13 +5,7 @@ import { confirmPublishedId, publishOnChain } from "@pantheon/sdk";
 import sql from "@/lib/db";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
-
-const ORACLE_SOURCE: Record<GodId, string> = {
-  demeter: "cspr.cloud/tvl",
-  hermes: "pyth/hermes",
-  apollo: "casper-rwa-oracle",
-};
+export const maxDuration = 120;
 
 export async function GET(
   req: Request,
@@ -32,7 +26,8 @@ export async function GET(
   const settlesAt = new Date(p.settlesAt);
   const questionHash = createHash("sha256").update(p.question).digest();
   const confidenceBp = Math.round(p.confidence * 10_000);
-  const oracleSource = ORACLE_SOURCE[p.godId];
+  // Embed the settlement spec into oracle_source so it's reproducible on chain.
+  const oracleSource = `pyth:${p.settlement.feed}${p.settlement.comparator}${p.settlement.threshold}`;
 
   const txHash = await publishOnChain({
     godId: p.godId,
@@ -56,7 +51,9 @@ export async function GET(
 
   const [row] = await sql`
     INSERT INTO prophecies
-      (god_id, on_chain_id, tx_hash, question, claim, confidence_bp, reasoning, oracle_source, settles_at)
+      (god_id, on_chain_id, tx_hash, question, claim, confidence_bp, reasoning,
+       oracle_source, settles_at,
+       settlement_feed, settlement_comparator, settlement_threshold)
     VALUES (
       ${p.godId},
       ${onChainId === null ? null : onChainId.toString()},
@@ -66,7 +63,10 @@ export async function GET(
       ${confidenceBp},
       ${p.reasoning},
       ${oracleSource},
-      ${settlesAt}
+      ${settlesAt},
+      ${p.settlement.feed},
+      ${p.settlement.comparator},
+      ${p.settlement.threshold}
     )
     RETURNING id, on_chain_id, settles_at;
   `;
@@ -79,6 +79,7 @@ export async function GET(
     txHash,
     confirmError,
     question: p.question,
+    settlement: p.settlement,
     settlesAt: row.settles_at,
   });
 }
