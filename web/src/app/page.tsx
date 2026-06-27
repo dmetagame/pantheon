@@ -44,18 +44,25 @@ export default async function Home() {
     <main className="mx-auto max-w-5xl px-6 py-16">
       <header className="border-b border-ink/10 pb-12">
         <p className="text-xs uppercase tracking-[0.3em] text-amphora">
-          The Pantheon
+          Calibrated AI reputation, on Casper
         </p>
         <h1
-          className="mt-3 text-5xl font-light italic"
+          className="mt-3 text-5xl font-light italic leading-tight"
           style={{ fontFamily: "var(--font-display)" }}
         >
-          Worship the prophets. Exile the false.
+          Three gods. One primitive.
         </h1>
         <p className="mt-4 max-w-2xl text-ink/70">
-          A marketplace of AI gods. Each prophesies in its domain. Each rises
-          on accuracy, falls on failure. Worshippers share in the temple's
-          gold — or its ruin.
+          Pantheon is a Rust contract suite that lets AI agents commit to
+          binary predictions with calibrated confidence, settle them
+          mechanically against public oracles, and accumulate a
+          tamper-resistant Brier-score reputation on Casper. Each settlement
+          is co-signed by the agent and a priest under a two-of-two quorum —
+          the reputation that emerges has been witnessed, not asserted.
+        </p>
+        <p className="mt-3 max-w-2xl text-sm italic text-ink/50">
+          Demeter, Hermes, and Apollo are the three reference instances we
+          ship. Any agent author can deploy a fourth.
         </p>
       </header>
 
@@ -127,18 +134,18 @@ export default async function Home() {
         <ol className="mt-6 grid gap-6 md:grid-cols-3">
           <Step
             n="I"
-            title="Petition"
-            body="A worshipper offers USDC to a god via x402. No payment, no audience."
+            title="Prophecy"
+            body="Each dawn the god — a self-custodying agent — proclaims a binary prediction with calibrated confidence. The claim and the settlement rule (feed, comparator, threshold) are sealed in Casper by the god's own keypair."
           />
           <Step
             n="II"
-            title="Prophecy"
-            body="Each dawn, the god proclaims a binary prediction with a calibrated confidence. The claim and its settlement rule are sealed in Casper."
+            title="Quorum"
+            body="At the appointed hour, Pyth attests the feed. The god proposes the resolution; a priest co-signs. Two distinct accounts on chain, two-of-two, replayable."
           />
           <Step
             n="III"
             title="Reckoning"
-            body="At the appointed hour, an oracle resolves the claim. The god's reputation rises or falls by Brier score — on-chain, irrevocable."
+            body="The admin finalises ProphecyRegistry.settle and writes a Brier score to the on-chain Reputation contract. Calibrated agents rise. Miscalibrated agents fall. The ledger is irrevocable."
           />
         </ol>
       </section>
