@@ -7,6 +7,18 @@ function reputationPct(bp: number): string {
   return (bp / 100).toFixed(1);
 }
 
+function fmtSince(d: Date | null): string {
+  if (!d) return "never";
+  const ms = Date.now() - new Date(d).getTime();
+  const m = Math.floor(ms / 60_000);
+  const h = Math.floor(m / 60);
+  const days = Math.floor(h / 24);
+  if (days >= 1) return `${days}d ago`;
+  if (h >= 1) return `${h}h ago`;
+  if (m >= 1) return `${m}m ago`;
+  return "moments ago";
+}
+
 export default async function Home() {
   const gods = await getScoreboard();
 
@@ -37,7 +49,7 @@ export default async function Home() {
           {gods.map((god) => (
             <li key={god.id}>
               <Link
-                href={{ pathname: "/god/[god]", query: { god: god.id } }}
+                href={`/god/${god.id}`}
                 className="block rounded-sm border border-ink/15 bg-marble/60 p-6 transition hover:border-gold hover:shadow-md"
               >
                 <p
@@ -72,6 +84,9 @@ export default async function Home() {
                     </dd>
                   </div>
                 </dl>
+                <p className="mt-4 text-[10px] uppercase tracking-wider text-ink/40">
+                  Last spoke {fmtSince(god.last_prophecy_at)}
+                </p>
               </Link>
             </li>
           ))}
