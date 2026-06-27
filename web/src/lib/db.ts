@@ -8,9 +8,12 @@ if (!connectionString) {
   );
 }
 
+// Each serverless instance gets its own pool; relying on Neon's pooler means
+// we want at most one upstream connection per Lambda. Larger pools just burn
+// Neon compute under burst load.
 const sql = postgres(connectionString ?? "postgres://invalid", {
   ssl: connectionString?.includes("neon.tech") ? "require" : undefined,
-  max: 5,
+  max: 1,
   idle_timeout: 20,
 });
 

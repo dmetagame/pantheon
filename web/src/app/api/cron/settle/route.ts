@@ -39,72 +39,80 @@ export async function GET(req: Request) {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  // Only settle rows whose publish was confirmed on chain AND have a settlement
-  // spec — otherwise we have nothing to feed ProphecyRegistry::settle.
-  const due = (await sql`
-    SELECT id, god_id, on_chain_id, claim, confidence_bp,
-           settlement_feed, settlement_comparator, settlement_threshold
-    FROM prophecies
-    WHERE settled_at IS NULL
-      AND settles_at < NOW()
-      AND on_chain_id IS NOT NULL
-      AND settlement_feed IS NOT NULL
-    ORDER BY settles_at ASC
-    LIMIT 5;
-  `) as unknown as DuePropecy[];
-
+  // FOR UPDATE SKIP LOCKED guarantees that two concurrent cron runs can't
+  // pick the same row — without this, both would call Reputation.record_outcome
+  // for the same prophecy and permanently double-count its Brier. The lock is
+  // held for the duration of the chain calls; concurrent runs simply skip
+  // these rows and pick up other due prophecies.
   const results: SettleSummary[] = [];
+  let considered = 0;
 
-  for (const p of due) {
-    const onChainIdStr = p.on_chain_id!;
-    try {
-      const spec = parseSpec(p);
-      const reading = await settleFromSpec(spec);
-      const brier = brierBp(p.claim, p.confidence_bp, reading.truth);
-      const settledAtMs = Date.now();
+  await sql.begin(async (tx) => {
+    const due = (await tx`
+      SELECT id, god_id, on_chain_id, claim, confidence_bp,
+             settlement_feed, settlement_comparator, settlement_threshold
+      FROM prophecies
+      WHERE settled_at IS NULL
+        AND settles_at < NOW()
+        AND on_chain_id IS NOT NULL
+        AND settlement_feed IS NOT NULL
+      ORDER BY settles_at ASC
+      FOR UPDATE SKIP LOCKED
+      LIMIT 5;
+    `) as unknown as DuePropecy[];
+    considered = due.length;
 
-      const settleTx = await settleOnChain({
-        id: BigInt(onChainIdStr),
-        truth: reading.truth,
-        sourceValue: reading.note,
-      });
-      const repTx = await recordOutcomeOnChain({
-        godId: p.god_id,
-        brierBp: brier,
-        settledAtMs,
-      });
+    for (const p of due) {
+      const onChainIdStr = p.on_chain_id!;
+      try {
+        const spec = parseSpec(p);
+        const reading = await settleFromSpec(spec);
+        const brier = brierBp(p.claim, p.confidence_bp, reading.truth);
+        const settledAtMs = Date.now();
 
-      await sql`
-        UPDATE prophecies
-        SET truth = ${reading.truth},
-            brier_bp = ${brier},
-            source_value = ${reading.note},
-            settled_at = ${new Date(settledAtMs)},
-            settle_tx_hash = ${settleTx}
-        WHERE id = ${p.id};
-      `;
+        const settleTx = await settleOnChain({
+          id: BigInt(onChainIdStr),
+          truth: reading.truth,
+          sourceValue: reading.note,
+        });
+        const repTx = await recordOutcomeOnChain({
+          godId: p.god_id,
+          brierBp: brier,
+          settledAtMs,
+        });
 
-      results.push({
-        id: p.id,
-        godId: p.god_id,
-        onChainId: onChainIdStr,
-        truth: reading.truth,
-        brierBp: brier,
-        settleTxHash: settleTx,
-        reputationTxHash: repTx,
-      });
-    } catch (e) {
-      results.push({
-        id: p.id,
-        godId: p.god_id,
-        onChainId: onChainIdStr,
-        error: e instanceof Error ? e.message : String(e),
-      });
+        await tx`
+          UPDATE prophecies
+          SET truth = ${reading.truth},
+              brier_bp = ${brier},
+              source_value = ${reading.note},
+              settled_at = ${new Date(settledAtMs)},
+              settle_tx_hash = ${settleTx}
+          WHERE id = ${p.id};
+        `;
+
+        results.push({
+          id: p.id,
+          godId: p.god_id,
+          onChainId: onChainIdStr,
+          truth: reading.truth,
+          brierBp: brier,
+          settleTxHash: settleTx,
+          reputationTxHash: repTx,
+        });
+      } catch (e) {
+        results.push({
+          id: p.id,
+          godId: p.god_id,
+          onChainId: onChainIdStr,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
     }
-  }
+  });
 
   return NextResponse.json({
-    considered: due.length,
+    considered,
     settled: results.filter((r) => !r.error).length,
     results,
   });

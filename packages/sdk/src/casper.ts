@@ -33,11 +33,20 @@ let cached: { key: PrivateKey; client: RpcClient } | null = null;
 function loadAdmin(): { key: PrivateKey; client: RpcClient } {
   if (cached) return cached;
 
+  // Prefer the inline PEM env var (used in production on Vercel where the
+  // filesystem is read-only); fall back to a file path for local dev.
+  const pemInline = process.env.CASPER_ADMIN_SECRET_KEY_PEM;
   const pemPath = process.env.CASPER_ADMIN_SECRET_KEY_PATH;
-  if (!pemPath) {
-    throw new Error("CASPER_ADMIN_SECRET_KEY_PATH not set");
+  let pem: string;
+  if (pemInline && pemInline.includes("BEGIN")) {
+    pem = pemInline.replace(/\\n/g, "\n");
+  } else if (pemPath) {
+    pem = readFileSync(pemPath, "utf8");
+  } else {
+    throw new Error(
+      "Neither CASPER_ADMIN_SECRET_KEY_PEM nor CASPER_ADMIN_SECRET_KEY_PATH is set",
+    );
   }
-  const pem = readFileSync(pemPath, "utf8");
   // Casper PrivateKey enum: 1 = Ed25519, 2 = Secp256k1.
   const algo = pem.includes("BEGIN EC PRIVATE KEY") ? 2 : 1;
   const key = PrivateKey.fromPem(pem, algo);

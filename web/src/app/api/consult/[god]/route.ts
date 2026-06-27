@@ -16,13 +16,18 @@ export async function POST(
     return NextResponse.json({ error: "unknown god" }, { status: 404 });
   }
 
-  // x402 paywall: clients first see 402, retry with X-PAYMENT.
-  const payment = req.headers.get("x-payment");
-  if (!payment) {
+  // x402 verification isn't wired yet (Day 18-20). Until it is, default-deny:
+  // an unsigned `x-payment` header would mean any client gets free LLM calls.
+  // For internal testing, set CONSULT_DEMO_SECRET and pass it as a bearer.
+  const demoSecret = process.env.CONSULT_DEMO_SECRET;
+  const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+  const isDemoAuthorized = !!demoSecret && bearer === demoSecret;
+  if (!isDemoAuthorized) {
     return new Response(
       JSON.stringify({
         x402Version: 1,
-        error: "Payment required to consult the god.",
+        error:
+          "Payment required to consult the god. (x402 verification is not yet enabled; this endpoint is closed.)",
         accepts: [
           {
             scheme: "exact",
@@ -41,8 +46,6 @@ export async function POST(
       },
     );
   }
-
-  // TODO Day 4: verify the x402 payment on Casper Testnet.
 
   let question: string;
   try {
