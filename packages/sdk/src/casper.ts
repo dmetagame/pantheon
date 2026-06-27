@@ -355,6 +355,6 @@ export async function registerGodOnChain(
     "admin",
     (b) =>
       b.byPackageHash(hash).entryPoint("register_god").runtimeArgs(args),
-    1_500_000_000,
+    3_500_000_000,
   );
 }
