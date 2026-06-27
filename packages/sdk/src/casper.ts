@@ -153,8 +153,86 @@ async function send(
   builderFn(b);
   const tx = b.build();
   await tx.sign(key);
-  const res = await client.putTransaction(tx);
-  return res.transactionHash.toHex();
+  // Every Casper tx is identified by a hash deterministically derived from
+  // its signed body, so we already know what tx hash to look for even before
+  // the node accepts it. If putTransaction's response is lost to a network
+  // error, this is the hash we poll for to decide adopt-vs-retry.
+  const expectedHash = tx.hash.toHex();
+  try {
+    const res = await client.putTransaction(tx);
+    return res.transactionHash.toHex();
+  } catch (err) {
+    if (!isLikelyNetworkError(err)) throw err;
+    // Lost the response — the tx may have landed anyway. Poll the node by
+    // the predetermined hash. If it ends up reverted, surface that as a
+    // distinct error so the cron can decide whether to retry or give up;
+    // we don't want to silently return a hash for a failed action.
+    const observed = await pollForTransaction(client, expectedHash, 90_000);
+    if (observed === "success") {
+      console.warn(
+        `[casper.send] adopted ${expectedHash} after network error: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return expectedHash;
+    }
+    if (observed === "reverted") {
+      throw new Error(
+        `Tx ${expectedHash} reverted on chain after a lost-response submission (signer=${signerName})`,
+      );
+    }
+    throw err;
+  }
+}
+
+function isLikelyNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  // Node's undici-backed fetch surfaces codes either on the error itself or
+  // on its .cause. Cover both shapes plus the canonical socket codes.
+  const direct = (err as { code?: unknown }).code;
+  const cause = (err as { cause?: { code?: unknown } }).cause;
+  const codes = [direct, cause?.code].filter(
+    (c): c is string => typeof c === "string",
+  );
+  const networkCodes = new Set([
+    "ETIMEDOUT",
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "EAI_AGAIN",
+    "UND_ERR_SOCKET",
+    "UND_ERR_CONNECT_TIMEOUT",
+    "UND_ERR_HEADERS_TIMEOUT",
+    "UND_ERR_BODY_TIMEOUT",
+    "FetchError",
+  ]);
+  if (codes.some((c) => networkCodes.has(c))) return true;
+  // String fallback for libraries that bury the code in the message.
+  return /ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up|fetch failed/i.test(
+    err.message,
+  );
+}
+
+async function pollForTransaction(
+  client: RpcClient,
+  txHash: string,
+  timeoutMs: number,
+): Promise<"success" | "reverted" | "not_found"> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await client.getTransactionByTransactionHash(txHash);
+      const info = res?.executionInfo as
+        | { executionResult: { errorMessage?: string } }
+        | undefined;
+      if (info) {
+        return info.executionResult.errorMessage ? "reverted" : "success";
+      }
+    } catch {
+      // not yet indexed by the node — keep polling
+    }
+    await sleep(5_000);
+  }
+  return "not_found";
 }
 
 export interface PublishParams {
