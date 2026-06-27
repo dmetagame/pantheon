@@ -168,13 +168,16 @@ async function runPipeline(p: DueProphecy): Promise<SettleSummary> {
     `;
   }
 
-  // 2/4: priest (admin in v1) approves the proposal.
+  // 2/4: the priest co-signs the proposal. With PRIEST_PUBLIC_KEY configured
+  // and set_priesthood already executed against it, this is a distinct on-chain
+  // signer from the admin — the cspr.live trail shows two genuinely distinct
+  // accounts in the quorum.
   let approveTx = p.approve_tx_hash;
   if (!approveTx) {
     note(2);
     approveTx = await approveProposalOnChain({
       proposalId: BigInt(proposalId),
-      signer: "admin",
+      signer: "priest",
     });
     await sql`
       UPDATE prophecies

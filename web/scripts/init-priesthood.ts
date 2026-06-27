@@ -10,22 +10,29 @@ import { setPriesthoodOnChain } from "@pantheon/sdk";
 const GODS = ["demeter", "hermes", "apollo"] as const;
 
 async function main(): Promise<void> {
-  const adminPubkey = process.env.CASPER_ADMIN_PUBLIC_KEY;
-  if (!adminPubkey) {
-    throw new Error("CASPER_ADMIN_PUBLIC_KEY not set");
+  // Prefer a distinct priest key; fall back to admin for legacy setups so the
+  // demo still works if init-priest.ts hasn't been run yet.
+  const priestPubkey =
+    process.env.PRIEST_PUBLIC_KEY ?? process.env.CASPER_ADMIN_PUBLIC_KEY;
+  if (!priestPubkey) {
+    throw new Error("Neither PRIEST_PUBLIC_KEY nor CASPER_ADMIN_PUBLIC_KEY set");
   }
+  const priestLabel = process.env.PRIEST_PUBLIC_KEY ? "priest" : "admin (legacy)";
+
   for (const godId of GODS) {
     const upper = godId.toUpperCase();
     const godPubkey = process.env[`${upper}_PUBLIC_KEY`];
     if (!godPubkey) {
       throw new Error(`${upper}_PUBLIC_KEY not set`);
     }
-    process.stdout.write(`set_priesthood ${godId} (god=${godPubkey.slice(0, 8)}…, priest=admin)… `);
+    process.stdout.write(
+      `set_priesthood ${godId} (god=${godPubkey.slice(0, 8)}…, priest=${priestPubkey.slice(0, 8)}… [${priestLabel}])… `,
+    );
     try {
       const tx = await setPriesthoodOnChain({
         godId,
         godPublicKeyHex: godPubkey,
-        priestPublicKeyHex: adminPubkey,
+        priestPublicKeyHex: priestPubkey,
       });
       console.log(`ok  tx=${tx}`);
     } catch (e) {
@@ -34,7 +41,9 @@ async function main(): Promise<void> {
     }
   }
   console.log("");
-  console.log("Priesthood set for all three gods. Settlement quorum is now wired.");
+  console.log(
+    "Priesthood set for all three gods. Future settlements will route through this key for the priest's signature.",
+  );
 }
 
 main().catch((e) => {

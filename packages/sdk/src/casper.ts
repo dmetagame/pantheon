@@ -31,8 +31,9 @@ const NODE_URL =
 const AUTH = process.env.CSPR_CLOUD_API_KEY ?? "";
 
 // "admin" signs administrative writes (settle, record_outcome,
-// register_god). Each god id signs its own publish + future treasury actions.
-export type SignerName = "admin" | "demeter" | "hermes" | "apollo";
+// register_god). "priest" co-signs settlement quorum proposals. Each god id
+// signs its own publish + future treasury actions.
+export type SignerName = "admin" | "priest" | "demeter" | "hermes" | "apollo";
 
 const signerCache = new Map<SignerName, PrivateKey>();
 let clientCache: RpcClient | null = null;
@@ -42,6 +43,12 @@ function envForSigner(name: SignerName): { pemVar: string; pathVar: string } {
     return {
       pemVar: "CASPER_ADMIN_SECRET_KEY_PEM",
       pathVar: "CASPER_ADMIN_SECRET_KEY_PATH",
+    };
+  }
+  if (name === "priest") {
+    return {
+      pemVar: "CASPER_PRIEST_SECRET_KEY_PEM",
+      pathVar: "CASPER_PRIEST_SECRET_KEY_PATH",
     };
   }
   const upper = name.toUpperCase();
