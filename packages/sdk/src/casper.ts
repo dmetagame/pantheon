@@ -14,8 +14,10 @@ const {
   CLValue,
   ContractCallBuilder,
   HttpHandler,
+  Key,
   KeyTypeID,
   PrivateKey,
+  PublicKey,
   RpcClient,
 } = casperSdk;
 type PrivateKey = InstanceType<typeof casperSdk.PrivateKey>;
@@ -28,38 +30,89 @@ const NODE_URL =
   process.env.CASPER_NODE_URL ?? "https://node.testnet.cspr.cloud/rpc";
 const AUTH = process.env.CSPR_CLOUD_API_KEY ?? "";
 
-let cached: { key: PrivateKey; client: RpcClient } | null = null;
+// "admin" signs administrative writes (settle, record_outcome,
+// register_god). Each god id signs its own publish + future treasury actions.
+export type SignerName = "admin" | "demeter" | "hermes" | "apollo";
 
-function loadAdmin(): { key: PrivateKey; client: RpcClient } {
+const signerCache = new Map<SignerName, PrivateKey>();
+let clientCache: RpcClient | null = null;
+
+function envForSigner(name: SignerName): { pemVar: string; pathVar: string } {
+  if (name === "admin") {
+    return {
+      pemVar: "CASPER_ADMIN_SECRET_KEY_PEM",
+      pathVar: "CASPER_ADMIN_SECRET_KEY_PATH",
+    };
+  }
+  const upper = name.toUpperCase();
+  return {
+    pemVar: `CASPER_GOD_${upper}_SECRET_KEY_PEM`,
+    pathVar: `CASPER_GOD_${upper}_SECRET_KEY_PATH`,
+  };
+}
+
+export interface GeneratedKey {
+  pem: string;
+  publicKeyHex: string;
+  accountHash: string;
+}
+
+/**
+ * Generate a fresh Ed25519 keypair for a new god. Returned PEM is unencrypted
+ * — caller is responsible for writing it to disk with secure permissions.
+ */
+export function generateEd25519Key(): GeneratedKey {
+  const key = PrivateKey.generate(1);
+  return {
+    pem: key.toPem(),
+    publicKeyHex: key.publicKey.toHex(),
+    accountHash: key.publicKey.accountHash().toHex(),
+  };
+}
+
+/** Read public key + account hash from an existing PEM (Ed25519 or Secp256k1). */
+export function keyInfoFromPem(pem: string): { publicKeyHex: string; accountHash: string } {
+  const algo = pem.includes("BEGIN EC PRIVATE KEY") ? 2 : 1;
+  const key = PrivateKey.fromPem(pem, algo);
+  return {
+    publicKeyHex: key.publicKey.toHex(),
+    accountHash: key.publicKey.accountHash().toHex(),
+  };
+}
+
+export function loadSigner(name: SignerName): PrivateKey {
+  const cached = signerCache.get(name);
   if (cached) return cached;
 
   // Prefer the inline PEM env var (used in production on Vercel where the
   // filesystem is read-only); fall back to a file path for local dev.
-  const pemInline = process.env.CASPER_ADMIN_SECRET_KEY_PEM;
-  const pemPath = process.env.CASPER_ADMIN_SECRET_KEY_PATH;
+  const { pemVar, pathVar } = envForSigner(name);
+  const pemInline = process.env[pemVar];
+  const pemPath = process.env[pathVar];
   let pem: string;
   if (pemInline && pemInline.includes("BEGIN")) {
     pem = pemInline.replace(/\\n/g, "\n");
   } else if (pemPath) {
     pem = readFileSync(pemPath, "utf8");
   } else {
-    throw new Error(
-      "Neither CASPER_ADMIN_SECRET_KEY_PEM nor CASPER_ADMIN_SECRET_KEY_PATH is set",
-    );
+    throw new Error(`Neither ${pemVar} nor ${pathVar} is set`);
   }
   // Casper PrivateKey enum: 1 = Ed25519, 2 = Secp256k1.
   const algo = pem.includes("BEGIN EC PRIVATE KEY") ? 2 : 1;
   const key = PrivateKey.fromPem(pem, algo);
+  signerCache.set(name, key);
+  return key;
+}
 
+export function loadClient(): RpcClient {
+  if (clientCache) return clientCache;
   const endpoint = NODE_URL.endsWith("/rpc")
     ? NODE_URL
     : `${NODE_URL.replace(/\/$/, "")}/rpc`;
   const handler = new HttpHandler(endpoint);
   if (AUTH) handler.setCustomHeaders({ Authorization: AUTH });
-  const client = new RpcClient(handler);
-
-  cached = { key, client };
-  return cached;
+  clientCache = new RpcClient(handler);
+  return clientCache;
 }
 
 function mustHex(v: string | undefined, name: string): string {
@@ -79,10 +132,12 @@ function clBytes(buf: Uint8Array): CLValue {
 }
 
 async function send(
+  signerName: SignerName,
   builderFn: (b: ContractCallBuilder) => void,
   gas: number,
 ): Promise<string> {
-  const { key, client } = loadAdmin();
+  const key = loadSigner(signerName);
+  const client = loadClient();
   const b = new ContractCallBuilder()
     .from(key.publicKey)
     .chainName(CHAIN_NAME)
@@ -117,7 +172,12 @@ export async function publishOnChain(p: PublishParams): Promise<string> {
     settles_at: CLValue.newCLUint64(BigInt(p.settlesAtMs)),
     oracle_source: CLValue.newCLString(p.oracleSource),
   });
+  // The god itself signs its publish. ProphecyRegistry's `require_publisher`
+  // check enforces that the signing account matches the registered publisher
+  // for that god_id, so this only works once register_god has been called with
+  // the god's public key (see scripts/register-gods.ts).
   return send(
+    p.godId as SignerName,
     (b) => b.byPackageHash(hash).entryPoint("publish").runtimeArgs(args),
     3_500_000_000,
   );
@@ -169,7 +229,7 @@ export async function confirmPublishedId(
   txHash: string,
   timeoutMs = 120_000,
 ): Promise<bigint> {
-  const { client } = loadAdmin();
+  const client = loadClient();
   const deadline = Date.now() + timeoutMs;
 
   let executionInfo: { executionResult: { errorMessage?: string; effects: unknown[] } } | undefined;
@@ -230,7 +290,11 @@ export async function settleOnChain(p: SettleParams): Promise<string> {
     truth: CLValue.newCLValueBool(p.truth),
     source_value: CLValue.newCLString(p.sourceValue),
   });
+  // Admin signs settle. The on-chain entry-point is `require_admin`; for the
+  // upcoming PriestQuorum flow the admin acts as the off-chain executor of a
+  // quorum-approved decision rather than as a unilateral oracle.
   return send(
+    "admin",
     (b) => b.byPackageHash(hash).entryPoint("settle").runtimeArgs(args),
     3_500_000_000,
   );
@@ -255,8 +319,42 @@ export async function recordOutcomeOnChain(
     settled_at: CLValue.newCLUint64(BigInt(p.settledAtMs)),
   });
   return send(
+    "admin",
     (b) =>
       b.byPackageHash(hash).entryPoint("record_outcome").runtimeArgs(args),
     3_500_000_000,
+  );
+}
+
+export interface RegisterGodParams {
+  godId: string;
+  /** Hex public key (with the 1-byte algorithm prefix Casper uses). */
+  publisherPublicKeyHex: string;
+}
+
+/**
+ * Admin call to ProphecyRegistry.register_god — sets the authorised publisher
+ * for a god so that god's keypair can publish prophecies for itself.
+ */
+export async function registerGodOnChain(
+  p: RegisterGodParams,
+): Promise<string> {
+  const hash = mustHex(
+    process.env.PROPHECY_REGISTRY_HASH,
+    "PROPHECY_REGISTRY_HASH",
+  );
+  // Odra `Address::Account(AccountHash)` <=> Casper `Key::Account(hash)`. We
+  // derive the account hash from the god's public key and wrap it as a CLKey.
+  const publisherPK = PublicKey.fromHex(p.publisherPublicKeyHex);
+  const publisherKey = Key.newKey(publisherPK.accountHash().toPrefixedString());
+  const args = Args.fromMap({
+    god_id: CLValue.newCLString(p.godId),
+    publisher: CLValue.newCLKey(publisherKey),
+  });
+  return send(
+    "admin",
+    (b) =>
+      b.byPackageHash(hash).entryPoint("register_god").runtimeArgs(args),
+    1_500_000_000,
   );
 }
