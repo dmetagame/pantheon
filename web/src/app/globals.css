@@ -6,8 +6,8 @@
   --color-gold: #c9a45e;
   --color-laurel: #4a5d3a;
   --color-amphora: #8a5a3b;
-  --font-display: "Cormorant Garamond", "Georgia", serif;
-  --font-body: "Inter", system-ui, sans-serif;
+  /* --font-display / --font-body are injected at runtime by next/font in
+     layout.tsx so we can serve woff2 and the right weights. */
 }
 
 body {

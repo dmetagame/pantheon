@@ -4,7 +4,10 @@ import { GODS } from "../registry";
 import type { GodId } from "../types";
 
 const PRIMARY = process.env.LLM_PRIMARY_MODEL ?? "google/gemini-2.5-flash";
-const FALLBACK = process.env.LLM_FALLBACK_MODEL ?? "groq/llama-3.3-70b-versatile";
+// Same fallback as prophesy.ts so the two paths stay aligned. consult uses
+// generateText (no json_schema dependency) so any model would work here, but
+// keeping them coherent avoids surprise if we ever swap the primary.
+const FALLBACK = process.env.LLM_FALLBACK_MODEL ?? "anthropic/claude-haiku-4-5";
 
 export async function consult(godId: GodId, petitionerQuestion: string): Promise<string> {
   const god = GODS[godId];
