@@ -6,6 +6,7 @@ import {
   prophecyStatus,
   type ProphecyRow,
 } from "@/lib/god";
+import { GOD_ACCENT, Sigil } from "../../_sigils";
 
 export const dynamic = "force-dynamic";
 
@@ -186,6 +187,7 @@ export default async function GodPage({
 
   const { stats, voice, allowedFeeds, recent } = detail;
   const meta = GODS[stats.id];
+  const accent = GOD_ACCENT[stats.id];
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-12">
@@ -197,15 +199,23 @@ export default async function GodPage({
       </Link>
 
       <header className="mt-8 border-b border-ink/10 pb-10">
-        <p className="text-xs uppercase tracking-[0.3em] text-amphora">
-          {meta.title}
-        </p>
-        <h1
-          className="mt-2 text-6xl font-light italic"
-          style={{ fontFamily: "var(--font-display)" }}
-        >
-          {meta.name}
-        </h1>
+        <div className="flex items-start justify-between gap-6">
+          <div>
+            <p className={`text-xs uppercase tracking-[0.3em] ${accent.text}`}>
+              {meta.title}
+            </p>
+            <h1
+              className="mt-2 text-6xl font-light italic"
+              style={{ fontFamily: "var(--font-display)" }}
+            >
+              {meta.name}
+            </h1>
+          </div>
+          <Sigil
+            godId={stats.id}
+            className={`size-16 shrink-0 ${accent.text} opacity-80`}
+          />
+        </div>
         <p className="mt-4 max-w-2xl text-ink/70">{meta.domain}</p>
         <p className="mt-2 max-w-2xl text-sm italic text-ink/50">{voice}</p>
 
