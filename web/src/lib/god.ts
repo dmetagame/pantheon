@@ -19,6 +19,7 @@ export interface ProphecyRow {
   settle_tx_hash: string | null;
   propose_tx_hash: string | null;
   approve_tx_hash: string | null;
+  reputation_tx_hash: string | null;
   quorum_proposal_id: string | null;
   settlement_feed: string | null;
   settlement_comparator: string | null;
@@ -44,7 +45,8 @@ export async function getGodDetail(godId: GodId): Promise<GodDetail | null> {
     SELECT
       id, on_chain_id, tx_hash, question, claim, confidence_bp, reasoning,
       published_at, settles_at, settled_at, truth, brier_bp, source_value,
-      settle_tx_hash, propose_tx_hash, approve_tx_hash, quorum_proposal_id,
+      settle_tx_hash, propose_tx_hash, approve_tx_hash, reputation_tx_hash,
+      quorum_proposal_id,
       settlement_feed, settlement_comparator, settlement_threshold
     FROM prophecies
     WHERE god_id = ${godId}

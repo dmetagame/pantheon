@@ -107,7 +107,8 @@ function ProphecyCard({ p }: { p: ProphecyRow }) {
       {(p.tx_hash ||
         p.propose_tx_hash ||
         p.approve_tx_hash ||
-        p.settle_tx_hash) && (
+        p.settle_tx_hash ||
+        p.reputation_tx_hash) && (
         <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-ink/40">
           {p.tx_hash && (
             <TxLink label="publish (god)" hash={p.tx_hash} />
@@ -120,6 +121,9 @@ function ProphecyCard({ p }: { p: ProphecyRow }) {
           )}
           {p.settle_tx_hash && (
             <TxLink label="settle" hash={p.settle_tx_hash} />
+          )}
+          {p.reputation_tx_hash && (
+            <TxLink label="reputation" hash={p.reputation_tx_hash} />
           )}
           {p.quorum_proposal_id && (
             <span className="text-ink/30">

@@ -37,6 +37,10 @@ interface GodDetailResponse {
     brier_bp: number | null;
     source_value: string | null;
     settle_tx_hash: string | null;
+    propose_tx_hash: string | null;
+    approve_tx_hash: string | null;
+    reputation_tx_hash: string | null;
+    quorum_proposal_id: string | null;
     settlement_feed: string | null;
     settlement_comparator: string | null;
     settlement_threshold: string | null;
