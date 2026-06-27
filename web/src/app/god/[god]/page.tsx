@@ -104,31 +104,44 @@ function ProphecyCard({ p }: { p: ProphecyRow }) {
         </p>
       )}
 
-      {(p.tx_hash || p.settle_tx_hash) && (
-        <p className="mt-3 flex gap-3 text-[11px] text-ink/40">
+      {(p.tx_hash ||
+        p.propose_tx_hash ||
+        p.approve_tx_hash ||
+        p.settle_tx_hash) && (
+        <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-ink/40">
           {p.tx_hash && (
-            <a
-              href={`${EXPLORER}/${p.tx_hash}`}
-              target="_blank"
-              rel="noreferrer"
-              className="hover:text-gold"
-            >
-              publish: {short(p.tx_hash)} ↗
-            </a>
+            <TxLink label="publish (god)" hash={p.tx_hash} />
+          )}
+          {p.propose_tx_hash && (
+            <TxLink label="propose (god)" hash={p.propose_tx_hash} />
+          )}
+          {p.approve_tx_hash && (
+            <TxLink label="approve (priest)" hash={p.approve_tx_hash} />
           )}
           {p.settle_tx_hash && (
-            <a
-              href={`${EXPLORER}/${p.settle_tx_hash}`}
-              target="_blank"
-              rel="noreferrer"
-              className="hover:text-gold"
-            >
-              settle: {short(p.settle_tx_hash)} ↗
-            </a>
+            <TxLink label="settle" hash={p.settle_tx_hash} />
+          )}
+          {p.quorum_proposal_id && (
+            <span className="text-ink/30">
+              quorum #{p.quorum_proposal_id}
+            </span>
           )}
         </p>
       )}
     </article>
+  );
+}
+
+function TxLink({ label, hash }: { label: string; hash: string }) {
+  return (
+    <a
+      href={`${EXPLORER}/${hash}`}
+      target="_blank"
+      rel="noreferrer"
+      className="hover:text-gold"
+    >
+      {label}: {short(hash)} ↗
+    </a>
   );
 }
 

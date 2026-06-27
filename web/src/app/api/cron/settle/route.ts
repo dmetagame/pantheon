@@ -6,7 +6,13 @@ import {
   type Comparator,
   type SettlementFeed,
 } from "@pantheon/agents";
-import { recordOutcomeOnChain, settleOnChain } from "@pantheon/sdk";
+import {
+  approveProposalOnChain,
+  confirmProposalCreatedId,
+  proposeSettlementOnChain,
+  recordOutcomeOnChain,
+  settleOnChain,
+} from "@pantheon/sdk";
 import sql from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -29,6 +35,9 @@ interface SettleSummary {
   onChainId: string | null;
   truth?: boolean;
   brierBp?: number;
+  quorumProposalId?: string;
+  proposeTxHash?: string;
+  approveTxHash?: string;
   settleTxHash?: string;
   reputationTxHash?: string;
   error?: string;
@@ -40,10 +49,9 @@ export async function GET(req: Request) {
   }
 
   // FOR UPDATE SKIP LOCKED guarantees that two concurrent cron runs can't
-  // pick the same row — without this, both would call Reputation.record_outcome
-  // for the same prophecy and permanently double-count its Brier. The lock is
-  // held for the duration of the chain calls; concurrent runs simply skip
-  // these rows and pick up other due prophecies.
+  // pick the same row. Each settle now spans four on-chain calls
+  // (propose → approve → settle → record_outcome); without the lock, two
+  // overlapping runs could double-propose and corrupt the Reputation EWMA.
   const results: SettleSummary[] = [];
   let considered = 0;
 
@@ -70,11 +78,31 @@ export async function GET(req: Request) {
         const brier = brierBp(p.claim, p.confidence_bp, reading.truth);
         const settledAtMs = Date.now();
 
+        // 1/4: god proposes the settlement to PriestQuorum (god-signed).
+        const proposeTx = await proposeSettlementOnChain({
+          godId: p.god_id,
+          prophecyId: BigInt(onChainIdStr),
+          truth: reading.truth,
+          sourceValue: reading.note,
+        });
+        const proposalId = await confirmProposalCreatedId(proposeTx);
+
+        // 2/4: priest (admin in v1) approves the proposal.
+        const approveTx = await approveProposalOnChain({
+          proposalId,
+          signer: "admin",
+        });
+
+        // 3/4: admin finalises ProphecyRegistry.settle (the contract is
+        // admin-gated; the quorum signatures above are the multi-party
+        // authorisation visible on chain).
         const settleTx = await settleOnChain({
           id: BigInt(onChainIdStr),
           truth: reading.truth,
           sourceValue: reading.note,
         });
+
+        // 4/4: admin records the outcome on Reputation.
         const repTx = await recordOutcomeOnChain({
           godId: p.god_id,
           brierBp: brier,
@@ -87,7 +115,10 @@ export async function GET(req: Request) {
               brier_bp = ${brier},
               source_value = ${reading.note},
               settled_at = ${new Date(settledAtMs)},
-              settle_tx_hash = ${settleTx}
+              settle_tx_hash = ${settleTx},
+              propose_tx_hash = ${proposeTx},
+              approve_tx_hash = ${approveTx},
+              quorum_proposal_id = ${proposalId.toString()}
           WHERE id = ${p.id};
         `;
 
@@ -97,6 +128,9 @@ export async function GET(req: Request) {
           onChainId: onChainIdStr,
           truth: reading.truth,
           brierBp: brier,
+          quorumProposalId: proposalId.toString(),
+          proposeTxHash: proposeTx,
+          approveTxHash: approveTx,
           settleTxHash: settleTx,
           reputationTxHash: repTx,
         });

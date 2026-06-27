@@ -326,6 +326,70 @@ export async function recordOutcomeOnChain(
   );
 }
 
+// ─── bytesrepr helpers ────────────────────────────────────────────────────
+
+function u32LE(v: number): Uint8Array {
+  const b = new Uint8Array(4);
+  new DataView(b.buffer).setUint32(0, v, true);
+  return b;
+}
+
+function u64LE(v: bigint): Uint8Array {
+  const b = new Uint8Array(8);
+  new DataView(b.buffer).setBigUint64(0, v, true);
+  return b;
+}
+
+function concat(...parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) {
+    out.set(p, off);
+    off += p.length;
+  }
+  return out;
+}
+
+function bytesreprString(s: string): Uint8Array {
+  const b = new TextEncoder().encode(s);
+  return concat(u32LE(b.length), b);
+}
+
+function bytesreprBytes(b: Uint8Array): Uint8Array {
+  return concat(u32LE(b.length), b);
+}
+
+/**
+ * Encode `PriestQuorum::ProposalKind::Custom { tag, payload }` as Odra's
+ * bytesrepr. Variant indices (in declaration order):
+ *   0 = WithdrawUsdc, 1 = LiquidateTemple, 2 = UpdateStrategy, 3 = Custom.
+ */
+function encodeCustomProposalKind(tag: string, payload: Uint8Array): Uint8Array {
+  const VARIANT_CUSTOM = 3;
+  return concat(
+    new Uint8Array([VARIANT_CUSTOM]),
+    bytesreprString(tag),
+    bytesreprBytes(payload),
+  );
+}
+
+/**
+ * Pantheon's settlement payload: (prophecy_id u64 LE, truth u8, source_value String).
+ * Stored inside ProposalKind::Custom { tag: "SettleProphecy", payload }.
+ */
+function encodeSettlementPayload(
+  prophecyId: bigint,
+  truth: boolean,
+  sourceValue: string,
+): Uint8Array {
+  return concat(
+    u64LE(prophecyId),
+    new Uint8Array([truth ? 1 : 0]),
+    bytesreprString(sourceValue),
+  );
+}
+
 export interface RegisterGodParams {
   godId: string;
   /** Hex public key (with the 1-byte algorithm prefix Casper uses). */
@@ -357,4 +421,154 @@ export async function registerGodOnChain(
       b.byPackageHash(hash).entryPoint("register_god").runtimeArgs(args),
     3_500_000_000,
   );
+}
+
+// ─── PriestQuorum ─────────────────────────────────────────────────────────
+
+function priestQuorumHash(): string {
+  return mustHex(process.env.PRIEST_QUORUM_HASH, "PRIEST_QUORUM_HASH");
+}
+
+function addressKeyFromHex(publicKeyHex: string): InstanceType<typeof Key> {
+  return Key.newKey(PublicKey.fromHex(publicKeyHex).accountHash().toPrefixedString());
+}
+
+export interface SetPriesthoodParams {
+  godId: string;
+  godPublicKeyHex: string;
+  priestPublicKeyHex: string;
+}
+
+/**
+ * Admin call to PriestQuorum.set_priesthood — registers (god, priest) as the
+ * two-of-two co-signers for proposals scoped to this god_id.
+ */
+export async function setPriesthoodOnChain(
+  p: SetPriesthoodParams,
+): Promise<string> {
+  const args = Args.fromMap({
+    god_id: CLValue.newCLString(p.godId),
+    god: CLValue.newCLKey(addressKeyFromHex(p.godPublicKeyHex)),
+    priest: CLValue.newCLKey(addressKeyFromHex(p.priestPublicKeyHex)),
+  });
+  return send(
+    "admin",
+    (b) =>
+      b.byPackageHash(priestQuorumHash()).entryPoint("set_priesthood").runtimeArgs(args),
+    3_500_000_000,
+  );
+}
+
+export interface ProposeSettlementParams {
+  godId: string;
+  prophecyId: bigint;
+  truth: boolean;
+  sourceValue: string;
+}
+
+/**
+ * God-signed call to PriestQuorum.propose with kind = Custom {
+ *   tag: "SettleProphecy", payload: bytesrepr(prophecyId, truth, sourceValue)
+ * }. The on-chain ProposalKind enum's `Custom` variant lets us encode the
+ * settlement decision without expanding the contract ABI. The off-chain
+ * orchestrator decodes the same payload when finalising
+ * ProphecyRegistry.settle.
+ */
+export async function proposeSettlementOnChain(
+  p: ProposeSettlementParams,
+): Promise<string> {
+  const payload = encodeSettlementPayload(p.prophecyId, p.truth, p.sourceValue);
+  const kindBytes = encodeCustomProposalKind("SettleProphecy", payload);
+  const args = Args.fromMap({
+    god_id: CLValue.newCLString(p.godId),
+    // ProposalKind is an `#[odra::odra_type]` enum; its CLType is `Any` so we
+    // pass the bytesrepr-encoded variant as a CL_Any value.
+    kind: CLValue.newCLAny(kindBytes),
+  });
+  return send(
+    p.godId as SignerName,
+    (b) =>
+      b.byPackageHash(priestQuorumHash()).entryPoint("propose").runtimeArgs(args),
+    3_500_000_000,
+  );
+}
+
+export interface ApproveProposalParams {
+  proposalId: bigint;
+  /** Whichever side signs — for v1 the priest slot is admin. */
+  signer: SignerName;
+}
+
+export async function approveProposalOnChain(
+  p: ApproveProposalParams,
+): Promise<string> {
+  const args = Args.fromMap({
+    proposal_id: CLValue.newCLUint64(p.proposalId),
+  });
+  return send(
+    p.signer,
+    (b) =>
+      b.byPackageHash(priestQuorumHash()).entryPoint("approve").runtimeArgs(args),
+    3_500_000_000,
+  );
+}
+
+// Parse ProposalCreated id from a propose tx receipt, mirroring
+// confirmPublishedId's event-marker scan.
+const PROPOSAL_CREATED_NAME = "event_ProposalCreated";
+const PROPOSAL_CREATED_MARKER: Uint8Array = (() => {
+  const name = new TextEncoder().encode(PROPOSAL_CREATED_NAME);
+  const out = new Uint8Array(4 + name.length);
+  new DataView(out.buffer).setUint32(0, name.length, true);
+  out.set(name, 4);
+  return out;
+})();
+
+export async function confirmProposalCreatedId(
+  txHash: string,
+  timeoutMs = 120_000,
+): Promise<bigint> {
+  const client = loadClient();
+  const deadline = Date.now() + timeoutMs;
+
+  let executionInfo: { executionResult: { errorMessage?: string; effects: unknown[] } } | undefined;
+  while (Date.now() < deadline) {
+    try {
+      const res = await client.getTransactionByTransactionHash(txHash);
+      if (res.executionInfo) {
+        executionInfo = res.executionInfo as typeof executionInfo;
+        break;
+      }
+    } catch {
+      // not yet indexed
+    }
+    await sleep(3_000);
+  }
+  if (!executionInfo) {
+    throw new Error(`Tx ${txHash} not finalized within ${timeoutMs}ms`);
+  }
+  const err = executionInfo.executionResult.errorMessage;
+  if (err) {
+    throw new Error(`Tx ${txHash} reverted: ${err}`);
+  }
+
+  for (const t of executionInfo.executionResult.effects as Array<{
+    key: { type: number };
+    kind: { isWriteCLValue: () => boolean; parseAsWriteCLValue: () => CLValue };
+  }>) {
+    if (t.key.type !== KeyTypeID.Dictionary) continue;
+    if (!t.kind.isWriteCLValue()) continue;
+    let raw: Uint8Array;
+    try {
+      raw = t.kind.parseAsWriteCLValue().bytes();
+    } catch {
+      continue;
+    }
+    const idx = findSubarray(raw, PROPOSAL_CREATED_MARKER);
+    if (idx < 0) continue;
+    const idOffset = idx + PROPOSAL_CREATED_MARKER.length;
+    if (idOffset + 8 > raw.length) continue;
+    return readU64LE(raw, idOffset);
+  }
+  throw new Error(`ProposalCreated event not found in tx ${txHash}`);
 }

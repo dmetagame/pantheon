@@ -10,6 +10,10 @@ export {
   loadClient,
   generateEd25519Key,
   keyInfoFromPem,
+  setPriesthoodOnChain,
+  proposeSettlementOnChain,
+  approveProposalOnChain,
+  confirmProposalCreatedId,
 } from "./casper";
 export type {
   PublishParams,
@@ -18,4 +22,7 @@ export type {
   RegisterGodParams,
   SignerName,
   GeneratedKey,
+  SetPriesthoodParams,
+  ProposeSettlementParams,
+  ApproveProposalParams,
 } from "./casper";
