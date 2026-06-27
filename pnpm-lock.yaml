@@ -51,6 +51,9 @@ importers:
       '@ai-sdk/gateway':
         specifier: ^1.0.0
         version: 1.0.41(zod@3.25.76)
+      '@pantheon/sdk':
+        specifier: workspace:*
+        version: link:../sdk
       ai:
         specifier: ^5.0.0
         version: 5.0.196(zod@3.25.76)
