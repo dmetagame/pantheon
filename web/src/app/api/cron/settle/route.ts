@@ -192,16 +192,22 @@ async function runPipeline(p: DueProphecy): Promise<SettleSummary> {
     `;
   }
 
-  // 2/4: the priest co-signs the proposal. With PRIEST_PUBLIC_KEY configured
-  // and set_priesthood already executed against it, this is a distinct on-chain
-  // signer from the admin — the cspr.live trail shows two genuinely distinct
-  // accounts in the quorum.
+  // 2/4: the priest co-signs the proposal. Per-god priests are preferred
+  // (signer = priest_<god>) so the quorum trail shows three independent
+  // priest accounts across the pantheon. Falls back to the shared "priest"
+  // signer when the per-god env vars aren't configured.
   let approveTx = p.approve_tx_hash;
   if (!approveTx) {
     note(2);
+    const perGodEnv =
+      process.env[`CASPER_PRIEST_${p.god_id.toUpperCase()}_SECRET_KEY_PATH`] ??
+      process.env[`CASPER_PRIEST_${p.god_id.toUpperCase()}_SECRET_KEY_PEM`];
+    const priestSigner: SignerName = perGodEnv
+      ? (`priest_${p.god_id}` as SignerName)
+      : "priest";
     approveTx = await approveProposalOnChain({
       proposalId: BigInt(proposalId),
-      signer: "priest",
+      signer: priestSigner,
     });
     await sql`
       UPDATE prophecies

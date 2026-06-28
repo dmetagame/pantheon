@@ -32,12 +32,16 @@ const NODE_URL =
 const AUTH = process.env.CSPR_CLOUD_API_KEY ?? "";
 
 // "admin" signs administrative writes (settle, record_outcome,
-// register_god). "priest" co-signs settlement quorum proposals. "petitioner"
-// is the autonomous-agent customer that pays x402 tithes to consult gods.
-// Each god id signs its own publish + future treasury actions.
+// register_god). "priest" + per-god priests ("priest_demeter" etc.) co-sign
+// settlement quorum proposals. "petitioner" is the autonomous-agent customer
+// that pays x402 tithes to consult gods. Each god id signs its own publish +
+// future treasury actions.
 export type SignerName =
   | "admin"
   | "priest"
+  | "priest_demeter"
+  | "priest_hermes"
+  | "priest_apollo"
   | "petitioner"
   | "demeter"
   | "hermes"
@@ -57,6 +61,13 @@ function envForSigner(name: SignerName): { pemVar: string; pathVar: string } {
     return {
       pemVar: "CASPER_PRIEST_SECRET_KEY_PEM",
       pathVar: "CASPER_PRIEST_SECRET_KEY_PATH",
+    };
+  }
+  if (name.startsWith("priest_")) {
+    const god = name.slice("priest_".length).toUpperCase();
+    return {
+      pemVar: `CASPER_PRIEST_${god}_SECRET_KEY_PEM`,
+      pathVar: `CASPER_PRIEST_${god}_SECRET_KEY_PATH`,
     };
   }
   if (name === "petitioner") {
