@@ -1,3 +1,4 @@
+import { getFungibleBalance } from "@pantheon/agents";
 import sql from "./db";
 
 export interface GodStats {
@@ -9,6 +10,10 @@ export interface GodStats {
   prophecies_settled: number;
   prophecies_pending: number;
   last_prophecy_at: Date | null;
+  /** Casper public key (with algorithm prefix). */
+  publicKey: string | null;
+  /** WCSPR (or configured x402 asset) treasury balance in atomic motes. */
+  treasuryMotes: string;
 }
 
 const GOD_META: Record<GodStats["id"], Pick<GodStats, "name" | "title" | "domain">> = {
@@ -50,6 +55,22 @@ function foldEwma(samples: number[]): number {
   return acc;
 }
 
+function godPublicKey(id: GodStats["id"]): string | null {
+  return process.env[`${id.toUpperCase()}_PUBLIC_KEY`] ?? null;
+}
+
+async function fetchTreasury(publicKeyHex: string | null): Promise<bigint> {
+  const tokenHash = process.env.X402_TOKEN_HASH;
+  if (!publicKeyHex || !tokenHash) return 0n;
+  try {
+    return await getFungibleBalance(publicKeyHex, tokenHash);
+  } catch (e) {
+    // Don't fail the whole page if the indexer hiccups; treasury just shows 0.
+    console.warn("[scoreboard] treasury fetch failed:", e);
+    return 0n;
+  }
+}
+
 export async function getScoreboard(): Promise<GodStats[]> {
   // Pending count excludes orphans (no on_chain_id) — those can't reach settle
   // until the sweeper backfills them, and inflating the live pending tally
@@ -71,7 +92,11 @@ export async function getScoreboard(): Promise<GodStats[]> {
   `) as unknown as Row[];
 
   const byId = new Map(rows.map((r) => [r.god_id, r]));
-  return (Object.keys(GOD_META) as GodStats["id"][]).map((id) => {
+  const ids = Object.keys(GOD_META) as GodStats["id"][];
+  const treasuries = await Promise.all(
+    ids.map((id) => fetchTreasury(godPublicKey(id))),
+  );
+  return ids.map((id, i) => {
     const r = byId.get(id);
     const ewmaBrier = foldEwma(r?.brier_history ?? []);
     return {
@@ -82,6 +107,8 @@ export async function getScoreboard(): Promise<GodStats[]> {
       prophecies_settled: r?.prophecies_settled ?? 0,
       prophecies_pending: r?.prophecies_pending ?? 0,
       last_prophecy_at: r?.last_prophecy_at ?? null,
+      publicKey: godPublicKey(id),
+      treasuryMotes: treasuries[i].toString(),
     };
   });
 }

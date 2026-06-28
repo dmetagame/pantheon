@@ -13,5 +13,5 @@ export { prophesy } from "./shared/prophesy";
 export { consult } from "./shared/consult";
 export { getBrief } from "./oracles/briefs";
 export { getPythPrices, PYTH_FEEDS, type PythPrice } from "./oracles/pyth";
-export { getCasperChainStats } from "./oracles/casper";
+export { getCasperChainStats, getFungibleBalance } from "./oracles/casper";
 export { settleFromSpec, type SettlementResult } from "./oracles/settle";

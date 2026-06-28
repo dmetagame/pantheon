@@ -25,6 +25,26 @@ function Step({ n, title, body }: { n: string; title: string; body: string }) {
   );
 }
 
+const TOKEN_SYMBOL = process.env.X402_TOKEN_SYMBOL ?? "WCSPR";
+const TOKEN_DECIMALS = parseInt(process.env.X402_TOKEN_DECIMALS ?? "9", 10);
+
+function fmtTreasury(motes: string): string {
+  if (!motes || motes === "0") return `0 ${TOKEN_SYMBOL}`;
+  const big = BigInt(motes);
+  const divisor = 10n ** BigInt(TOKEN_DECIMALS);
+  const whole = big / divisor;
+  const frac = big % divisor;
+  // Show up to 4 decimals trimmed.
+  const fracStr = frac
+    .toString()
+    .padStart(TOKEN_DECIMALS, "0")
+    .slice(0, 4)
+    .replace(/0+$/, "");
+  return fracStr
+    ? `${whole}.${fracStr} ${TOKEN_SYMBOL}`
+    : `${whole} ${TOKEN_SYMBOL}`;
+}
+
 function fmtSince(d: Date | null): string {
   if (!d) return "never";
   const ms = Date.now() - new Date(d).getTime();
@@ -117,9 +137,17 @@ export default async function Home() {
                     </dd>
                   </div>
                 </dl>
-                <p className="mt-4 text-[10px] uppercase tracking-wider text-ink/40">
-                  Last spoke {fmtSince(god.last_prophecy_at)}
-                </p>
+                <div className="mt-4 flex items-baseline justify-between">
+                  <p className="text-[10px] uppercase tracking-wider text-ink/40">
+                    Last spoke {fmtSince(god.last_prophecy_at)}
+                  </p>
+                  <p
+                    className={`text-[11px] tabular-nums ${accent.text} opacity-80`}
+                    title="On-chain treasury — collected x402 tithes"
+                  >
+                    △ {fmtTreasury(god.treasuryMotes)}
+                  </p>
+                </div>
               </Link>
             </li>
             );

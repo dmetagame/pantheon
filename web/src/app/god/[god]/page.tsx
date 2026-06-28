@@ -6,6 +6,7 @@ import {
   prophecyStatus,
   type ProphecyRow,
 } from "@/lib/god";
+import type { GodStats } from "@/lib/scoreboard";
 import { GOD_ACCENT, Sigil } from "../../_sigils";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +42,59 @@ function fmtRelative(d: Date): string {
 }
 
 const EXPLORER = "https://cspr.live/deploy";
+const ACCOUNT_EXPLORER = "https://testnet.cspr.live/account";
+const TOKEN_SYMBOL = process.env.X402_TOKEN_SYMBOL ?? "WCSPR";
+const TOKEN_DECIMALS = parseInt(process.env.X402_TOKEN_DECIMALS ?? "9", 10);
+
+function fmtTreasury(motes: string): string {
+  if (!motes || motes === "0") return `0 ${TOKEN_SYMBOL}`;
+  const big = BigInt(motes);
+  const divisor = 10n ** BigInt(TOKEN_DECIMALS);
+  const whole = big / divisor;
+  const frac = big % divisor;
+  const fracStr = frac
+    .toString()
+    .padStart(TOKEN_DECIMALS, "0")
+    .slice(0, 4)
+    .replace(/0+$/, "");
+  return fracStr
+    ? `${whole}.${fracStr} ${TOKEN_SYMBOL}`
+    : `${whole} ${TOKEN_SYMBOL}`;
+}
+
+function shortPubkey(pk: string): string {
+  return `${pk.slice(0, 10)}…${pk.slice(-6)}`;
+}
+
+function TreasuryStrip({
+  stats,
+  accentText,
+}: {
+  stats: GodStats;
+  accentText: string;
+}) {
+  if (!stats.publicKey) return null;
+  return (
+    <div className="mt-6 flex flex-wrap items-baseline justify-between gap-3 rounded-sm border border-ink/10 bg-marble/50 px-4 py-3 text-xs">
+      <div>
+        <p className="text-[10px] uppercase tracking-wider text-ink/50">
+          Treasury (on-chain)
+        </p>
+        <p className={`mt-1 text-base font-medium tabular-nums ${accentText}`}>
+          {fmtTreasury(stats.treasuryMotes)}
+        </p>
+      </div>
+      <a
+        href={`${ACCOUNT_EXPLORER}/${stats.publicKey}`}
+        target="_blank"
+        rel="noreferrer"
+        className="text-[10px] text-ink/50 hover:text-gold"
+      >
+        {shortPubkey(stats.publicKey)} ↗
+      </a>
+    </div>
+  );
+}
 
 function ProphecyCard({ p }: { p: ProphecyRow }) {
   const status = prophecyStatus(p);
@@ -261,6 +315,11 @@ export default async function GodPage({
             value={allowedFeeds.join(" · ")}
           />
         </dl>
+
+        <TreasuryStrip
+          stats={stats}
+          accentText={accent.text}
+        />
       </header>
 
       <section className="mt-12">
