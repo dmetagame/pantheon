@@ -1,5 +1,9 @@
 [workspace]
 members = ["cli", "prophecy", "priest_quorum", "reputation"]
+# wrap_cspr is a v2 session WASM that's blocked on a Rust nightly /
+# casper-contract incompatibility — see contracts/wrap_cspr/README.md.
+# Excluded from the workspace so cargo build doesn't fail.
+exclude = ["wrap_cspr"]
 resolver = "2"
 
 [workspace.dependencies]
