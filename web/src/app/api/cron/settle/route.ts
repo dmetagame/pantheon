@@ -18,6 +18,7 @@ import {
   type SignerName,
 } from "@pantheon/sdk";
 import sql from "@/lib/db";
+import { log } from "@/lib/log";
 
 // Bond pool / slash on broken prophecy.
 // Brier ≥ this threshold (in basis points) triggers a refund from the god's
@@ -257,10 +258,12 @@ async function runPipeline(p: DueProphecy): Promise<SettleSummary> {
   // resolved on chain and the cron will retry on the next run.
   const refunds = brier >= SLASH_BRIER_BP_THRESHOLD
     ? await slashAndRefund(p.god_id, p.id, brier).catch((e) => {
-        console.warn(
-          `[settle] slashAndRefund failed for prophecy ${p.id}:`,
-          e instanceof Error ? e.message : e,
-        );
+        log.warn("settle.slash_failed", {
+          prophecyId: p.id,
+          godId: p.god_id,
+          brier,
+          error: e instanceof Error ? e.message : String(e),
+        });
         return [] as RefundSummary[];
       })
     : [];
@@ -340,9 +343,7 @@ async function slashAndRefund(
   const tokenHash = process.env.X402_TOKEN_HASH;
   const godPubkey = process.env[`${godId.toUpperCase()}_PUBLIC_KEY`];
   if (!tokenHash || !godPubkey) {
-    console.warn(
-      `[slash] missing X402_TOKEN_HASH or ${godId.toUpperCase()}_PUBLIC_KEY — skipping refund for prophecy ${prophecyId}`,
-    );
+    log.warn("slash.config_missing", { godId, prophecyId });
     return [];
   }
 
@@ -397,14 +398,21 @@ async function slashAndRefund(
         amountMotes: perRecipient.toString(),
         txHash,
       });
-      console.log(
-        `[slash] refunded consult ${c.id} ${perRecipient} motes from ${godId} (brier=${brierBp}): tx=${txHash}`,
-      );
+      log.info("slash.refund_dispatched", {
+        godId,
+        prophecyId,
+        consultId: c.id,
+        amountMotes: perRecipient.toString(),
+        brier: brierBp,
+        txHash,
+      });
     } catch (e) {
-      console.warn(
-        `[slash] refund failed for consult ${c.id}:`,
-        e instanceof Error ? e.message : e,
-      );
+      log.warn("slash.refund_failed", {
+        godId,
+        prophecyId,
+        consultId: c.id,
+        error: e instanceof Error ? e.message : String(e),
+      });
     }
   }
   return summaries;

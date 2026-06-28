@@ -11,8 +11,9 @@
 // happened — no DB trust required.
 
 import { NextResponse } from "next/server";
-import { GODS, type GodId } from "@pantheon/agents";
+import { GODS } from "@pantheon/agents";
 import { consultReceiptHash, receiptHashToTransferId } from "@pantheon/sdk";
+import { enforceRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,11 +33,23 @@ interface CsprCloudTransfersResp {
 }
 
 export async function POST(req: Request) {
+  // Verification is cheap (no LLM, no chain write) but it does hit
+  // cspr.cloud's tx index. 120/min per IP is plenty for any legitimate
+  // verifier.
+  const { headers: rlHeaders, deny } = enforceRateLimit(req, "verify", {
+    capacity: 120,
+    windowMs: 60_000,
+  });
+  if (deny) return deny;
+
   let body: unknown;
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+    return NextResponse.json(
+      { error: "invalid JSON body" },
+      { status: 400, headers: rlHeaders },
+    );
   }
   const { godId, question, answer, settleTxHash } = (body ?? {}) as {
     godId?: string;
@@ -53,7 +66,7 @@ export async function POST(req: Request) {
   ) {
     return NextResponse.json(
       { error: "godId, question, answer, settleTxHash all required" },
-      { status: 400 },
+      { status: 400, headers: rlHeaders },
     );
   }
 
@@ -61,7 +74,7 @@ export async function POST(req: Request) {
   if (!godPubkey) {
     return NextResponse.json(
       { error: `${godId} has no PUBLIC_KEY configured` },
-      { status: 500 },
+      { status: 500, headers: rlHeaders },
     );
   }
 
@@ -84,7 +97,7 @@ export async function POST(req: Request) {
   if (!res.ok) {
     return NextResponse.json(
       { error: `cspr.cloud ${res.status}: ${await res.text().catch(() => "")}` },
-      { status: 502 },
+      { status: 502, headers: rlHeaders },
     );
   }
   const data = (await res.json()) as CsprCloudTransfersResp;
@@ -115,5 +128,5 @@ export async function POST(req: Request) {
     explanation: match
       ? "Receipt verified. The keccak256 of (godId | question | answer | settleTxHash) maps to the transfer-id of a native CSPR transfer to the god's account — proving the petitioner committed this exact answer on chain."
       : "No matching receipt found among the god's recent 50 transfers. The consultation may not have been receipt-binded, or the inputs don't match what was originally signed.",
-  });
+  }, { headers: rlHeaders });
 }

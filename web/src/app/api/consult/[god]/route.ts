@@ -13,6 +13,8 @@ import {
 import sql from "@/lib/db";
 import { getReputationBp } from "@/lib/scoreboard";
 import { basePriceMotes, priceFromReputation } from "@/lib/pricing";
+import { enforceRateLimit } from "@/lib/rate-limit";
+import { log } from "@/lib/log";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -24,6 +26,14 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ god: string }> },
 ) {
+  // Consult is expensive (LLM call + facilitator round-trip + chain writes).
+  // 20/min per IP is plenty for any legitimate agent.
+  const { headers: rlHeaders, deny } = enforceRateLimit(req, "consult", {
+    capacity: 20,
+    windowMs: 60_000,
+  });
+  if (deny) return deny;
+
   const { god: godId } = await params;
   if (!(godId in GODS)) {
     return NextResponse.json({ error: "unknown god" }, { status: 404 });
@@ -190,11 +200,11 @@ export async function POST(
       // done and the petitioner already paid. Surface the full chain error
       // in logs (the casper-js-sdk error wraps the upstream payload).
       const err = e as { message?: string; sourceErr?: unknown };
-      console.warn(
-        "[consult] receipt write failed:",
-        err.message,
-        JSON.stringify(err.sourceErr ?? {}),
-      );
+      log.warn("consult.receipt_failed", {
+        godId,
+        message: err.message,
+        source: err.sourceErr ?? null,
+      });
     }
   }
 
@@ -217,7 +227,10 @@ export async function POST(
     );
   `;
 
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...rlHeaders,
+  };
   if (paidViaX402) {
     headers[X_PAYMENT_RESPONSE_HEADER] = Buffer.from(
       JSON.stringify({

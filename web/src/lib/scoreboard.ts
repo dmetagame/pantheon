@@ -2,6 +2,7 @@ import { getFungibleBalance } from "@pantheon/agents";
 import { readReputationFromChain } from "@pantheon/sdk";
 import sql from "./db";
 import { basePriceMotes, priceFromReputation } from "./pricing";
+import { log } from "./log";
 
 export interface GodStats {
   id: "demeter" | "hermes" | "apollo";
@@ -88,7 +89,10 @@ async function fetchTreasury(publicKeyHex: string | null): Promise<bigint> {
     return await getFungibleBalance(publicKeyHex, tokenHash);
   } catch (e) {
     // Don't fail the whole page if the indexer hiccups; treasury just shows 0.
-    console.warn("[scoreboard] treasury fetch failed:", e);
+    log.warn("scoreboard.treasury_fetch_failed", {
+      publicKey: publicKeyHex,
+      error: e instanceof Error ? e.message : String(e),
+    });
     return 0n;
   }
 }
@@ -107,7 +111,10 @@ async function fetchChainReputation(id: GodStats["id"]): Promise<ChainRep> {
       prophecies_settled: r.prophecies_settled,
     };
   } catch (e) {
-    console.warn(`[scoreboard] chain reputation fetch failed for ${id}:`, e);
+    log.warn("scoreboard.chain_reputation_fetch_failed", {
+      godId: id,
+      error: e instanceof Error ? e.message : String(e),
+    });
     return { reputationBp: 0, prophecies_settled: 0 };
   }
 }
