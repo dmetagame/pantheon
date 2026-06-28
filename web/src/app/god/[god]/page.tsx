@@ -78,6 +78,8 @@ function TreasuryStrip({
   accentText: string;
 }) {
   if (!stats.publicKey) return null;
+  const matches =
+    Math.abs(stats.reputationBp - stats.dbReputationBp) <= 5; // ±0.05% slack for rounding
   return (
     <div className="mt-6 flex flex-wrap items-baseline justify-between gap-3 rounded-sm border border-ink/10 bg-marble/50 px-4 py-3 text-xs">
       <div>
@@ -97,6 +99,21 @@ function TreasuryStrip({
           title="Linearly scaled by reputation. New oracles are cheap; calibrated oracles cost more."
         >
           {fmtTreasury(stats.consultPriceMotes)}
+        </p>
+      </div>
+      <div>
+        <p className="text-[10px] uppercase tracking-wider text-ink/50">
+          DB ⇄ chain
+        </p>
+        <p
+          className={`mt-1 text-base font-medium tabular-nums ${matches ? "text-laurel" : "text-amphora"}`}
+          title={
+            matches
+              ? "Off-chain EWMA equals on-chain reputation_bp(godId) — independent computations agree."
+              : `Off-chain EWMA = ${(stats.dbReputationBp / 100).toFixed(2)}% vs on-chain ${(stats.reputationBp / 100).toFixed(2)}% — operational state and contract state disagree.`
+          }
+        >
+          {matches ? "✓ match" : `Δ ${((stats.dbReputationBp - stats.reputationBp) / 100).toFixed(2)}%`}
         </p>
       </div>
       <a

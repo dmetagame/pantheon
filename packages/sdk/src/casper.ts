@@ -730,6 +730,180 @@ export async function confirmProposalCreatedId(
 // ─── consult receipts (Tier 2 v2) ─────────────────────────────────────────
 
 import { keccak_256 } from "@noble/hashes/sha3";
+import { blake2b } from "@noble/hashes/blake2b";
+
+// ─── on-chain reputation read (Tier 1.H) ──────────────────────────────────
+
+/**
+ * The `reputations` mapping is the third user field declared on the
+ * Reputation Odra module (admin / writer / reputations / alpha_bp /
+ * miss_penalty_bp), but Odra prefixes user fields with one internal slot —
+ * so the runtime field index is 3. Confirmed by direct testnet query.
+ */
+const REPUTATIONS_FIELD_INDEX = 3;
+
+/** Derive the Casper dictionary item key for a Mapping<String, _> in Odra. */
+function odraMappingDictKey(fieldIndex: number, mappingKey: string): string {
+  // Odra packs ≤15-deep paths as a u32 BE — for a top-level field that's
+  // just the index encoded in 4 bytes.
+  const indexBytes = new Uint8Array([0, 0, 0, fieldIndex]);
+  const keyBytes = new TextEncoder().encode(mappingKey);
+  const lenLE = new Uint8Array(4);
+  new DataView(lenLE.buffer).setUint32(0, keyBytes.length, true);
+  const input = new Uint8Array(
+    indexBytes.length + lenLE.length + keyBytes.length,
+  );
+  input.set(indexBytes, 0);
+  input.set(lenLE, indexBytes.length);
+  input.set(keyBytes, indexBytes.length + lenLE.length);
+  return Array.from(blake2b(input, { dkLen: 32 }), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+export interface ChainReputation {
+  /** Lower = better. EWMA Brier in basis points. */
+  accuracyBp: number;
+  prophecies_settled: number;
+  prophecies_missed: number;
+  /** Unix timestamp (ms) of the last record_outcome call. */
+  lastUpdatedMs: bigint;
+}
+
+/**
+ * Read a god's reputation directly from the Reputation contract's
+ * `reputations` mapping. Returns null if the god has no entry yet.
+ *
+ * Implementation: Odra Mapping<String, V> is stored as a dictionary under
+ * the module's `state` URef. The dictionary key is
+ * blake2b256(index_bytes || bytesrepr(key)). We query the node by URef +
+ * derived key, then bytesrepr-decode the value.
+ */
+export async function readReputationFromChain(
+  godId: string,
+): Promise<ChainReputation | null> {
+  const client = loadClient();
+  const contractHash = mustHex(
+    process.env.REPUTATION_CONTRACT_VERSION_HASH ??
+      process.env.REPUTATION_CONTRACT_HASH,
+    "REPUTATION_CONTRACT_VERSION_HASH or REPUTATION_CONTRACT_HASH",
+  );
+
+  // Step 1: query the contract entity to find its `state` URef.
+  // We use the raw RPC: query_global_state path-less against the contract.
+  const stateUref = await fetchContractStateUref(contractHash);
+  if (!stateUref) return null;
+
+  // Step 2: compute the Odra-derived dictionary item key.
+  const dictKey = odraMappingDictKey(REPUTATIONS_FIELD_INDEX, godId);
+
+  // Step 3: get_dictionary_item by URef.
+  const stateRootHash = (
+    await client.getStateRootHashLatest()
+  ).stateRootHash.toHex();
+  const body = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "state_get_dictionary_item",
+    params: {
+      state_root_hash: stateRootHash,
+      dictionary_identifier: {
+        URef: {
+          seed_uref: stateUref,
+          dictionary_item_key: dictKey,
+        },
+      },
+    },
+  };
+  const res = await fetch(rpcEndpoint(), {
+    method: "POST",
+    headers: rpcHeaders(),
+    body: JSON.stringify(body),
+  });
+  const data = (await res.json()) as {
+    result?: {
+      stored_value?: { CLValue?: { bytes?: string } };
+    };
+    error?: { message?: string; data?: string };
+  };
+  if (data.error) {
+    // "value was not found in the global state" → god not yet recorded.
+    if ((data.error.data ?? "").includes("not found")) return null;
+    throw new Error(
+      `state_get_dictionary_item failed: ${data.error.message}: ${data.error.data}`,
+    );
+  }
+  const clBytesHex = data.result?.stored_value?.CLValue?.bytes;
+  if (!clBytesHex) return null;
+  return decodeGodReputation(clBytesHex);
+}
+
+function decodeGodReputation(clBytesHex: string): ChainReputation {
+  // CLValue is a List<U8>: first 4 bytes = u32 LE length, then the bytesrepr
+  // of the GodReputation struct in declaration order:
+  //   accuracy_bp: u32 LE (4 bytes)
+  //   prophecies_settled: u32 LE (4 bytes)
+  //   prophecies_missed: u32 LE (4 bytes)
+  //   last_updated: u64 LE (8 bytes)
+  // Total payload: 20 bytes; outer wrapper: 24 bytes hex (48 chars beyond the
+  // u32 length prefix).
+  const all = Buffer.from(clBytesHex, "hex");
+  const payload = all.subarray(4); // strip u32 length prefix
+  if (payload.length < 20) {
+    throw new Error(
+      `Reputation payload too short: expected 20+ bytes, got ${payload.length}`,
+    );
+  }
+  return {
+    accuracyBp: payload.readUInt32LE(0),
+    prophecies_settled: payload.readUInt32LE(4),
+    prophecies_missed: payload.readUInt32LE(8),
+    lastUpdatedMs: payload.readBigUInt64LE(12),
+  };
+}
+
+function rpcEndpoint(): string {
+  return NODE_URL.endsWith("/rpc")
+    ? NODE_URL
+    : `${NODE_URL.replace(/\/$/, "")}/rpc`;
+}
+
+function rpcHeaders(): Record<string, string> {
+  const h: Record<string, string> = { "Content-Type": "application/json" };
+  if (AUTH) h.Authorization = AUTH;
+  return h;
+}
+
+/** Fetch the `state` URef from the contract entity's named keys. */
+async function fetchContractStateUref(
+  contractHash: string,
+): Promise<string | null> {
+  const body = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "query_global_state",
+    params: {
+      state_identifier: null,
+      key: `hash-${contractHash}`,
+      path: [],
+    },
+  };
+  const res = await fetch(rpcEndpoint(), {
+    method: "POST",
+    headers: rpcHeaders(),
+    body: JSON.stringify(body),
+  });
+  const data = (await res.json()) as {
+    result?: {
+      stored_value?: {
+        Contract?: { named_keys?: Array<{ name: string; key: string }> };
+      };
+    };
+  };
+  const nk = data.result?.stored_value?.Contract?.named_keys ?? [];
+  const state = nk.find((k) => k.name === "state");
+  return state?.key ?? null;
+}
 
 /**
  * Derive the deterministic receipt hash for a consultation. The same inputs

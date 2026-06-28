@@ -19,6 +19,7 @@ export {
   consultReceiptHash,
   receiptHashToTransferId,
   transferCep18FromGod,
+  readReputationFromChain,
 } from "./casper";
 export type {
   PublishParams,
@@ -33,6 +34,7 @@ export type {
   ConsultReceiptParams,
   ConsultReceipt,
   TransferCep18Params,
+  ChainReputation,
 } from "./casper";
 
 export {

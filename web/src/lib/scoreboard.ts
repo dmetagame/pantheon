@@ -1,4 +1,5 @@
 import { getFungibleBalance } from "@pantheon/agents";
+import { readReputationFromChain } from "@pantheon/sdk";
 import sql from "./db";
 import { basePriceMotes, priceFromReputation } from "./pricing";
 
@@ -7,7 +8,12 @@ export interface GodStats {
   name: string;
   title: string;
   domain: string;
+  /** Reputation as read from the Reputation contract on chain (canonical). */
   reputationBp: number; // 0–10000, higher = better
+  /** Reputation as DB would compute it from its local prophecies table. Used
+   *  purely as a sanity check against the chain value. Equal in normal
+   *  operation; divergent rows are flagged in the UI. */
+  dbReputationBp: number;
   prophecies_settled: number;
   prophecies_pending: number;
   last_prophecy_at: Date | null;
@@ -62,21 +68,13 @@ function foldEwma(samples: number[]): number {
  * Single-god reputation lookup. Same EWMA fold as getScoreboard, but only one
  * SQL query and no cspr.cloud calls — cheap enough to run on every consult.
  */
+/**
+ * Reputation in basis points for a single god, read from the on-chain
+ * Reputation contract. Used by the consult-pricing path so the price a
+ * petitioner pays scales with the same number cspr.live shows for the god.
+ */
 export async function getReputationBp(id: GodStats["id"]): Promise<number> {
-  const rows = (await sql`
-    SELECT
-      ARRAY_AGG(brier_bp ORDER BY settled_at)
-        FILTER (WHERE settled_at IS NOT NULL AND brier_bp IS NOT NULL) AS brier_history,
-      COUNT(*) FILTER (WHERE settled_at IS NOT NULL)::int AS prophecies_settled
-    FROM prophecies
-    WHERE god_id = ${id};
-  `) as unknown as Array<{
-    brier_history: number[] | null;
-    prophecies_settled: number;
-  }>;
-  const r = rows[0];
-  if (!r || r.prophecies_settled === 0) return 0;
-  return 10_000 - foldEwma(r.brier_history ?? []);
+  return (await fetchChainReputation(id)).reputationBp;
 }
 
 function godPublicKey(id: GodStats["id"]): string | null {
@@ -95,42 +93,76 @@ async function fetchTreasury(publicKeyHex: string | null): Promise<bigint> {
   }
 }
 
+interface ChainRep {
+  reputationBp: number;
+  prophecies_settled: number;
+}
+
+async function fetchChainReputation(id: GodStats["id"]): Promise<ChainRep> {
+  try {
+    const r = await readReputationFromChain(id);
+    if (!r) return { reputationBp: 0, prophecies_settled: 0 };
+    return {
+      reputationBp: 10_000 - r.accuracyBp,
+      prophecies_settled: r.prophecies_settled,
+    };
+  } catch (e) {
+    console.warn(`[scoreboard] chain reputation fetch failed for ${id}:`, e);
+    return { reputationBp: 0, prophecies_settled: 0 };
+  }
+}
+
 export async function getScoreboard(): Promise<GodStats[]> {
   // Pending count excludes orphans (no on_chain_id) — those can't reach settle
   // until the sweeper backfills them, and inflating the live pending tally
   // misleads viewers.
   //
-  // brier_history is ordered by settled_at so we can fold the same EWMA the
-  // on-chain Reputation contract computes; otherwise the UI's mean would
-  // disagree with cspr.live's view of reputation_bp().
+  // brier_history is ordered by settled_at and filtered to rows that actually
+  // had record_outcome land on chain (reputation_tx_hash NOT NULL). Early
+  // test settlements that never propagated to the Reputation contract would
+  // otherwise inflate the DB EWMA vs. what the chain holds. With this filter
+  // the DB fold and the on-chain reputation_bp(godId) agree exactly.
   const rows = (await sql`
     SELECT
       god_id,
-      COUNT(*) FILTER (WHERE settled_at IS NOT NULL)::int  AS prophecies_settled,
+      COUNT(*) FILTER (WHERE settled_at IS NOT NULL AND reputation_tx_hash IS NOT NULL)::int AS prophecies_settled,
       COUNT(*) FILTER (WHERE settled_at IS NULL AND on_chain_id IS NOT NULL)::int AS prophecies_pending,
       MAX(published_at) AS last_prophecy_at,
       ARRAY_AGG(brier_bp ORDER BY settled_at)
-        FILTER (WHERE settled_at IS NOT NULL AND brier_bp IS NOT NULL) AS brier_history
+        FILTER (WHERE settled_at IS NOT NULL AND brier_bp IS NOT NULL AND reputation_tx_hash IS NOT NULL) AS brier_history
     FROM prophecies
     GROUP BY god_id;
   `) as unknown as Row[];
 
   const byId = new Map(rows.map((r) => [r.god_id, r]));
   const ids = Object.keys(GOD_META) as GodStats["id"][];
-  const treasuries = await Promise.all(
-    ids.map((id) => fetchTreasury(godPublicKey(id))),
-  );
+  // Fan out to cspr.cloud (treasury) and the node RPC (chain reputation) in
+  // parallel so the page render isn't serialised on two round-trips per god.
+  const [treasuries, chainReps] = await Promise.all([
+    Promise.all(ids.map((id) => fetchTreasury(godPublicKey(id)))),
+    Promise.all(ids.map((id) => fetchChainReputation(id))),
+  ]);
   const base = basePriceMotes();
   return ids.map((id, i) => {
     const r = byId.get(id);
     const ewmaBrier = foldEwma(r?.brier_history ?? []);
-    const reputationBp =
+    const dbReputationBp =
       r && r.prophecies_settled > 0 ? 10_000 - ewmaBrier : 0;
+    const chain = chainReps[i];
+    // Chain is the canonical source for pricing + display. The DB EWMA is
+    // tracked separately so the UI can show "off-chain agrees" or flag a
+    // divergence when ops state and chain state drift.
+    const reputationBp = chain.reputationBp;
+    const prophecies_settled = Math.max(
+      chain.prophecies_settled,
+      r?.prophecies_settled ?? 0,
+    );
     return {
       id,
       ...GOD_META[id],
       reputationBp,
-      prophecies_settled: r?.prophecies_settled ?? 0,
+      dbReputationBp,
+      prophecies_settled,
       prophecies_pending: r?.prophecies_pending ?? 0,
       last_prophecy_at: r?.last_prophecy_at ?? null,
       publicKey: godPublicKey(id),
