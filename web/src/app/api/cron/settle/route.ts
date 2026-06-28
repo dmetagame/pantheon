@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   COMPARATORS,
   SETTLEMENT_FEEDS,
+  getFungibleBalance,
   settleFromSpec,
   type Comparator,
   type SettlementFeed,
@@ -10,10 +11,30 @@ import {
   approveProposalOnChain,
   confirmProposalCreatedId,
   proposeSettlementOnChain,
+  pubkeyToAccountKeyHex,
   recordOutcomeOnChain,
   settleOnChain,
+  transferCep18FromGod,
+  type SignerName,
 } from "@pantheon/sdk";
 import sql from "@/lib/db";
+
+// Bond pool / slash on broken prophecy.
+// Brier ≥ this threshold (in basis points) triggers a refund from the god's
+// treasury back to recent petitioners. A Brier of 5000bp means "50% wrong on
+// expectation" — the god was confidently incorrect.
+const SLASH_BRIER_BP_THRESHOLD = parseInt(
+  process.env.SLASH_BRIER_BP_THRESHOLD ?? "3000",
+  10,
+);
+// Fraction of the god's WCSPR treasury to distribute (basis points).
+const SLASH_RATE_BP = parseInt(process.env.SLASH_RATE_BP ?? "2000", 10); // 20%
+// Up to this many most-recent consultations get a pro-rata share of the
+// slash amount.
+const SLASH_RECIPIENTS_MAX = parseInt(
+  process.env.SLASH_RECIPIENTS_MAX ?? "3",
+  10,
+);
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -59,6 +80,8 @@ interface SettleSummary {
   approveTxHash?: string;
   settleTxHash?: string;
   reputationTxHash?: string;
+  /** Bond pool refunds dispatched when brier ≥ threshold. */
+  refunds?: RefundSummary[];
   /** The first step actually executed this run (vs. resumed from DB). */
   firstExecutedStep?: 1 | 2 | 3 | 4;
   error?: string;
@@ -226,6 +249,22 @@ async function runPipeline(p: DueProphecy): Promise<SettleSummary> {
     `;
   }
 
+  // 5/5: bond pool / slashing. A Brier ≥ threshold means the god was
+  // confidently wrong. Slash a fraction of the god's WCSPR treasury and
+  // refund it pro-rata to recent petitioners — reputation now has
+  // retrospective economic teeth, not just a lower future consult price.
+  // Failures here don't roll back the settle; the prophecy is already
+  // resolved on chain and the cron will retry on the next run.
+  const refunds = brier >= SLASH_BRIER_BP_THRESHOLD
+    ? await slashAndRefund(p.god_id, p.id, brier).catch((e) => {
+        console.warn(
+          `[settle] slashAndRefund failed for prophecy ${p.id}:`,
+          e instanceof Error ? e.message : e,
+        );
+        return [] as RefundSummary[];
+      })
+    : [];
+
   return {
     id: p.id,
     godId: p.god_id,
@@ -236,6 +275,7 @@ async function runPipeline(p: DueProphecy): Promise<SettleSummary> {
     proposeTxHash: proposeTx,
     approveTxHash: approveTx,
     settleTxHash: settleTx,
+    refunds,
     reputationTxHash: reputationTx,
     firstExecutedStep,
   };
@@ -271,4 +311,101 @@ function brierBp(claim: boolean, confidenceBp: number, truth: boolean): number {
   const pTruthBp = claim === truth ? confidenceBp : 10_000 - confidenceBp;
   const diff = 10_000 - pTruthBp;
   return Math.floor((diff * diff) / 10_000);
+}
+
+interface RefundSummary {
+  consultationId: number;
+  petitionerAccountKeyHex: string;
+  amountMotes: string;
+  txHash: string;
+}
+
+interface RecentConsult {
+  id: number;
+  petitioner: string;
+}
+
+/**
+ * Bond pool slashing. Reads the god's current WCSPR balance, computes the
+ * slash amount (treasury × SLASH_RATE_BP / 10000), splits it across up to
+ * SLASH_RECIPIENTS_MAX most-recent consultations on this god that haven't
+ * been refunded yet, and signs a CEP18 transfer from the god to each
+ * petitioner. Records refund_tx_hash + amount on each consultation row.
+ */
+async function slashAndRefund(
+  godId: string,
+  prophecyId: number,
+  brierBp: number,
+): Promise<RefundSummary[]> {
+  const tokenHash = process.env.X402_TOKEN_HASH;
+  const godPubkey = process.env[`${godId.toUpperCase()}_PUBLIC_KEY`];
+  if (!tokenHash || !godPubkey) {
+    console.warn(
+      `[slash] missing X402_TOKEN_HASH or ${godId.toUpperCase()}_PUBLIC_KEY — skipping refund for prophecy ${prophecyId}`,
+    );
+    return [];
+  }
+
+  const treasuryMotes = await getFungibleBalance(godPubkey, tokenHash);
+  if (treasuryMotes === 0n) return [];
+
+  // Find recent consultations on this god that haven't been refunded yet
+  // AND have a petitioner address we can refund to.
+  const recents = (await sql`
+    SELECT id, petitioner
+    FROM consultations
+    WHERE god_id = ${godId}
+      AND payment_tx_hash IS NOT NULL
+      AND refund_tx_hash IS NULL
+      AND petitioner IS NOT NULL
+    ORDER BY created_at DESC
+    LIMIT ${SLASH_RECIPIENTS_MAX};
+  `) as unknown as RecentConsult[];
+
+  if (recents.length === 0) return [];
+
+  const totalSlashMotes =
+    (treasuryMotes * BigInt(SLASH_RATE_BP)) / 10_000n;
+  if (totalSlashMotes === 0n) return [];
+
+  // Pro-rata even split — simple and demo-friendly.
+  const perRecipient = totalSlashMotes / BigInt(recents.length);
+  if (perRecipient === 0n) return [];
+
+  const summaries: RefundSummary[] = [];
+  for (const c of recents) {
+    try {
+      // Petitioner is the 33-byte Key form from the facilitator's settle
+      // response (`00<account-hash>`). The CEP18 transfer expects the bare
+      // 32-byte account hash; transferCep18FromGod handles the strip.
+      const txHash = await transferCep18FromGod({
+        signer: godId as SignerName,
+        tokenPackageHash: tokenHash,
+        recipientAccountKeyHex: c.petitioner,
+        amountMotes: perRecipient,
+      });
+      await sql`
+        UPDATE consultations
+        SET refund_tx_hash = ${txHash},
+            refund_amount = ${perRecipient.toString()},
+            refund_prophecy_id = ${prophecyId}
+        WHERE id = ${c.id};
+      `;
+      summaries.push({
+        consultationId: c.id,
+        petitionerAccountKeyHex: c.petitioner,
+        amountMotes: perRecipient.toString(),
+        txHash,
+      });
+      console.log(
+        `[slash] refunded consult ${c.id} ${perRecipient} motes from ${godId} (brier=${brierBp}): tx=${txHash}`,
+      );
+    } catch (e) {
+      console.warn(
+        `[slash] refund failed for consult ${c.id}:`,
+        e instanceof Error ? e.message : e,
+      );
+    }
+  }
+  return summaries;
 }

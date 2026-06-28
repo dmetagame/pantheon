@@ -11,6 +11,9 @@ export interface ConsultationRow {
   petitioner: string | null;
   receipt_tx_hash: string | null;
   receipt_id_hex: string | null;
+  refund_tx_hash: string | null;
+  refund_amount: string | null;
+  refund_prophecy_id: string | null;
   created_at: Date;
 }
 
@@ -25,7 +28,8 @@ export async function getRecentConsultations(
   if (!(godId in GODS)) return [];
   return (await sql`
     SELECT id, god_id, question, answer, paid_amount_usdc, payment_tx_hash,
-           petitioner, receipt_tx_hash, receipt_id_hex, created_at
+           petitioner, receipt_tx_hash, receipt_id_hex,
+           refund_tx_hash, refund_amount, refund_prophecy_id, created_at
     FROM consultations
     WHERE god_id = ${godId}
     ORDER BY created_at DESC

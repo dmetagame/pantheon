@@ -438,6 +438,48 @@ export async function recordOutcomeOnChain(
   );
 }
 
+export interface TransferCep18Params {
+  /** The signer name — the god is the one moving its own treasury. */
+  signer: SignerName;
+  /** CEP18 token contract package hash (e.g. WCSPR's). */
+  tokenPackageHash: string;
+  /** 33-byte Casper Key hex for the recipient (00 + 32-byte account hash). */
+  recipientAccountKeyHex: string;
+  /** Atomic-unit amount to transfer (token's smallest denom). */
+  amountMotes: bigint;
+}
+
+/**
+ * God-signed CEP18 transfer from the god's treasury to a recipient (typically
+ * a slashed-prophecy refund to a recent petitioner). Uses the standard
+ * CEP-18 `transfer(recipient: Key, amount: U256)` entry-point.
+ */
+export async function transferCep18FromGod(
+  p: TransferCep18Params,
+): Promise<string> {
+  const tokenHash = mustHex(p.tokenPackageHash, "tokenPackageHash");
+  const recipientKey = Key.newKey(`account-hash-${stripKeyTag(p.recipientAccountKeyHex)}`);
+  const args = Args.fromMap({
+    recipient: CLValue.newCLKey(recipientKey),
+    amount: CLValue.newCLUInt256(p.amountMotes),
+  });
+  return send(
+    p.signer,
+    (b) =>
+      b.byPackageHash(tokenHash).entryPoint("transfer").runtimeArgs(args),
+    3_500_000_000,
+  );
+}
+
+/** Strip the 1-byte Casper Key type-tag if present, leaving a 64-char hex hash. */
+function stripKeyTag(hex: string): string {
+  const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+  if (clean.length === 66 && (clean.startsWith("00") || clean.startsWith("01"))) {
+    return clean.slice(2);
+  }
+  return clean;
+}
+
 // ─── bytesrepr helpers ────────────────────────────────────────────────────
 
 function u32LE(v: number): Uint8Array {

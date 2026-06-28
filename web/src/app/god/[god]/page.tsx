@@ -207,8 +207,11 @@ function ProphecyCard({ p }: { p: ProphecyRow }) {
 
 function ConsultationCard({ c }: { c: ConsultationRow }) {
   const verified = !!c.receipt_tx_hash;
+  const refunded = !!c.refund_tx_hash && c.refund_amount;
   return (
-    <article className="rounded-sm border border-ink/15 bg-marble/70 p-5">
+    <article
+      className={`rounded-sm border p-5 ${refunded ? "border-amphora/40 bg-amphora/[0.03]" : "border-ink/15 bg-marble/70"}`}
+    >
       <p
         className="text-lg italic leading-snug"
         style={{ fontFamily: "var(--font-display)" }}
@@ -225,13 +228,25 @@ function ConsultationCard({ c }: { c: ConsultationRow }) {
           </>
         )}
       </p>
-      {(c.payment_tx_hash || c.receipt_tx_hash) && (
+      {refunded && (
+        <p className="mt-3 rounded-sm border border-amphora/30 bg-amphora/5 px-3 py-2 text-[11px] text-amphora">
+          Bond slashed — prophecy #{c.refund_prophecy_id} broke. Refunded{" "}
+          <span className="font-medium tabular-nums">
+            {fmtTreasury(c.refund_amount!)}
+          </span>{" "}
+          to petitioner.
+        </p>
+      )}
+      {(c.payment_tx_hash || c.receipt_tx_hash || c.refund_tx_hash) && (
         <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-ink/40">
           {c.payment_tx_hash && (
             <TxLink label="x402 settle" hash={c.payment_tx_hash} />
           )}
           {c.receipt_tx_hash && (
             <TxLink label="receipt" hash={c.receipt_tx_hash} />
+          )}
+          {c.refund_tx_hash && (
+            <TxLink label="refund" hash={c.refund_tx_hash} />
           )}
           {verified && (
             <span
