@@ -260,11 +260,17 @@ export async function signPaymentPayload(opts: BuildAndSignOpts): Promise<{
     ensureHexPrefix(opts.paymentRequirements.asset),
   );
 
+  // CASPER_DOMAIN_TYPES is required when the domain uses Casper-specific
+  // fields (chain_name, contract_package_hash). Without it the lib falls back
+  // to EVM domain types (name/version/chainId/verifyingContract), producing a
+  // different domain separator than the Facilitator computes — the symptom
+  // is the Facilitator's "invalid_exact_casper_invalid_signature".
   const digestBytes = eip712.hashTypedData(
     domain,
     eip712.TransferAuthorizationTypes,
     "TransferAuthorization",
     auth as unknown as Record<string, unknown>,
+    { domainTypes: eip712.CASPER_DOMAIN_TYPES },
   ) as Uint8Array;
   // The Casper x402 Facilitator verifies signatures via casper-eip-712's
   // recoverAddress(), which only accepts secp256k1 ECDSA signatures with a
