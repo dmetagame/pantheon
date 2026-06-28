@@ -125,6 +125,28 @@ After deploy the CLI prints each package hash. Paste them into
 > entry, not the generic `propose` with a Custom-variant payload.
 > Redeployment is required after pulling source changes.
 
+> ⚠️ **Casper Testnet `gas_price_tolerance` patch.** As of 2026-06-28
+> the testnet rejects transactions whose `gas_price_tolerance` exceeds
+> the network's `max_gas_price` (currently 1). Odra 2.7.2 hardcodes
+> tolerance=5 in three places under
+> `odra-casper-rpc-client-2.7.2/src/casper_client/{configuration.rs,
+> transactions.rs}`. Apply this patch to the cargo registry before
+> running `pantheon_cli deploy`:
+>
+> ```sh
+> sed -i 's/DEFAULT_GAS_TOLERANCE: u8 = 5/DEFAULT_GAS_TOLERANCE: u8 = 1/' \
+>   ~/.cargo/registry/src/index.crates.io-*/odra-casper-rpc-client-2.7.2/src/casper_client/configuration.rs
+> sed -i 's/gas_price_tolerance: 5,/gas_price_tolerance: 1,/g' \
+>   ~/.cargo/registry/src/index.crates.io-*/odra-casper-rpc-client-2.7.2/src/casper_client/transactions.rs
+> cargo clean -p odra-casper-rpc-client
+> cargo build --release -p pantheon-cli   # picks up the patched dep
+> ```
+>
+> Without this patch you'll see `Deploy error:
+> ExecutionError(ContractDeploymentError)` and the proxy will surface
+> `Invalid transaction: The transaction sent to the network had an
+> invalid pricing mode` on the RPC response.
+
 ## 7. Register on-chain identities
 
 ```sh
