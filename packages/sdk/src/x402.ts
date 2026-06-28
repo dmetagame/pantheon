@@ -14,13 +14,28 @@
 
 import * as eip712Ns from "@casper-ecosystem/casper-eip-712";
 import * as casperSdkNs from "casper-js-sdk";
-import { secp256k1 } from "@noble/curves/secp256k1";
 
 const eip712 =
   (eip712Ns as unknown as { default?: typeof eip712Ns }).default ?? eip712Ns;
 const casperSdk =
   (casperSdkNs as unknown as { default?: typeof casperSdkNs }).default ??
   casperSdkNs;
+
+// The Casper x402 Facilitator uses TransferWithAuthorization (not the
+// TransferAuthorization variant in casper-eip-712's prebuilt types), with
+// `address` for from/to and `uint256` for the validity timestamps. The
+// authoritative reference is github.com/make-software/casper-x402's
+// js/packages/mechanisms/casper/src/exact/client/scheme.ts.
+const TRANSFER_WITH_AUTHORIZATION_TYPES = {
+  TransferWithAuthorization: [
+    { name: "from", type: "address" },
+    { name: "to", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "validAfter", type: "uint256" },
+    { name: "validBefore", type: "uint256" },
+    { name: "nonce", type: "bytes32" },
+  ],
+};
 
 const { PrivateKey, PublicKey } = casperSdk;
 type PrivateKey = InstanceType<typeof casperSdk.PrivateKey>;
@@ -228,29 +243,27 @@ export async function signPaymentPayload(opts: BuildAndSignOpts): Promise<{
   header: string;
 }> {
   const cfg = envConfig();
-  // EIP-712 TransferAuthorizationTypes declares from/to as `bytes32` so we
-  // sign over the bare 32-byte account hashes. The on-wire JSON payload
-  // separately carries the 33-byte Casper Key form (account-type tag + hash)
-  // because that's what the Facilitator's payTo/from/to validators expect.
-  const fromAccountHash = stripHexPrefix(
-    opts.signerKey.publicKey.accountHash().toHex(),
-  );
-  const toAccountHash = stripHexPrefix(stripKeyPrefix(opts.recipient));
-  const fromKeyHex = `00${fromAccountHash}`;
-  const toKeyHex = `00${toAccountHash}`;
-  const validForSeconds = opts.validForSeconds ?? 600;
-  const nowSeconds = BigInt(Math.floor(Date.now() / 1000));
-  const validAfter = nowSeconds - 60n; // small backdate slack for clock skew
-  const validBefore = nowSeconds + BigInt(validForSeconds);
+  // x402 Casper wire form for from/to is the 33-byte Casper Key
+  // (`00` Account type tag + 32-byte account hash). The typed-data
+  // `address` encoder keccak256's the full 33 bytes, so we sign over the
+  // same 33-byte form — no separate "sign 32, send 33" split needed.
+  const fromKeyHex = `00${stripHexPrefix(opts.signerKey.publicKey.accountHash().toHex())}`;
+  const toKeyHex = `00${stripKeyPrefix(opts.recipient)}`;
 
-  const nonce = randomNonce32Hex();
-  const auth: TransferAuthorization = {
-    from: ensureHexPrefix(fromAccountHash),
-    to: ensureHexPrefix(toAccountHash),
+  const validForSeconds = opts.validForSeconds ?? 600;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  // Reference client backdates validAfter by 10 min for clock skew tolerance.
+  const validAfter = nowSeconds - 600;
+  const validBefore = nowSeconds + validForSeconds;
+  const nonceHex = randomNonce32Hex();
+
+  const message = {
+    from: `0x${fromKeyHex}`,
+    to: `0x${toKeyHex}`,
     value: BigInt(opts.amount),
-    valid_after: validAfter,
-    valid_before: validBefore,
-    nonce: ensureHexPrefix(nonce),
+    validAfter: BigInt(validAfter),
+    validBefore: BigInt(validBefore),
+    nonce: `0x${nonceHex}`,
   };
 
   const domain = eip712.buildDomain(
@@ -260,38 +273,24 @@ export async function signPaymentPayload(opts: BuildAndSignOpts): Promise<{
     ensureHexPrefix(opts.paymentRequirements.asset),
   );
 
-  // CASPER_DOMAIN_TYPES is required when the domain uses Casper-specific
-  // fields (chain_name, contract_package_hash). Without it the lib falls back
-  // to EVM domain types (name/version/chainId/verifyingContract), producing a
-  // different domain separator than the Facilitator computes — the symptom
-  // is the Facilitator's "invalid_exact_casper_invalid_signature".
+  // Two non-obvious requirements:
+  // (1) primary type is `TransferWithAuthorization`, not the prebuilt
+  //     `TransferAuthorization` in @casper-ecosystem/casper-eip-712.
+  // (2) Pass CASPER_DOMAIN_TYPES so the domain separator is built from
+  //     chain_name + contract_package_hash, not the EVM default.
   const digestBytes = eip712.hashTypedData(
     domain,
-    eip712.TransferAuthorizationTypes,
-    "TransferAuthorization",
-    auth as unknown as Record<string, unknown>,
+    TRANSFER_WITH_AUTHORIZATION_TYPES,
+    "TransferWithAuthorization",
+    message,
     { domainTypes: eip712.CASPER_DOMAIN_TYPES },
   ) as Uint8Array;
-  // The Casper x402 Facilitator verifies signatures via casper-eip-712's
-  // recoverAddress(), which only accepts secp256k1 ECDSA signatures with a
-  // recovery byte: `r || s || v` (65 bytes). casper-js-sdk's PrivateKey.sign
-  // for secp256k1 returns 64 raw bytes (r || s) without v, so we sign
-  // through @noble/curves directly to get a recoverable Signature.
-  const publicKeyHex = opts.signerKey.publicKey.toHex();
-  if (!publicKeyHex.startsWith("02")) {
-    throw new Error(
-      "x402 requires a Secp256k1 keypair (publicKey starts with 02). " +
-        `Got ${publicKeyHex.slice(0, 2)} — regenerate the petitioner key as Secp256k1.`,
-    );
-  }
-  const privateKeyBytes = opts.signerKey.toBytes();
-  const nobleSig = secp256k1.sign(digestBytes, privateKeyBytes, {
-    prehash: false,
-  });
-  const sigCompact = nobleSig.toCompactRawBytes(); // 64 bytes: r || s
-  const sigBytes = new Uint8Array(65);
-  sigBytes.set(sigCompact, 0);
-  sigBytes[64] = nobleSig.recovery ?? 0;
+
+  // The Casper Facilitator verifies with native casper-js-sdk signing — same
+  // algorithm-tagged form (`01` || ed25519 sig) the chain itself uses. Works
+  // for both Ed25519 and Secp256k1. No ECDSA recovery byte / EVM-style
+  // r||s||v encoding involved.
+  const sigBytes = await opts.signerKey.signAndAddAlgorithmBytes(digestBytes);
   const sigHex = bytesToHex(sigBytes);
 
   const payload: PaymentPayload = {
@@ -304,10 +303,10 @@ export async function signPaymentPayload(opts: BuildAndSignOpts): Promise<{
       authorization: {
         from: fromKeyHex,
         to: toKeyHex,
-        value: auth.value.toString(),
-        validAfter: auth.valid_after.toString(),
-        validBefore: auth.valid_before.toString(),
-        nonce: stripHexPrefix(auth.nonce),
+        value: String(message.value),
+        validAfter: String(validAfter),
+        validBefore: String(validBefore),
+        nonce: nonceHex,
       },
     },
   };
