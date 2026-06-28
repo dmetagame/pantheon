@@ -15,6 +15,9 @@ export {
   proposeSettlementOnChain,
   approveProposalOnChain,
   confirmProposalCreatedId,
+  recordConsultReceiptOnChain,
+  consultReceiptHash,
+  receiptHashToTransferId,
 } from "./casper";
 export type {
   PublishParams,
@@ -26,6 +29,8 @@ export type {
   SetPriesthoodParams,
   ProposeSettlementParams,
   ApproveProposalParams,
+  ConsultReceiptParams,
+  ConsultReceipt,
 } from "./casper";
 
 export {

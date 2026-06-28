@@ -4,8 +4,10 @@ import {
   buildAcceptsEnvelope,
   decodePaymentHeader,
   pubkeyToAccountKeyHex,
+  recordConsultReceiptOnChain,
   settleOnFacilitator,
   verifyOnFacilitator,
+  type ConsultReceipt,
   type PaymentRequirements,
 } from "@pantheon/sdk";
 import sql from "@/lib/db";
@@ -167,17 +169,51 @@ export async function POST(
     }
   }
 
-  // ─── 5. persist + respond ──────────────────────────────────────────────
+  // ─── 5. on-chain receipt ───────────────────────────────────────────────
+  // The petitioner signs a tiny self-transfer whose transfer_id is the lower
+  // 8 bytes of keccak256(godId | question | answer | settle_tx_hash). Anyone
+  // who knows those four can recompute the hash and find the matching
+  // transfer on cspr.live — no database trust required. We only attempt this
+  // when there's a real settle tx to bind to; the bearer-demo path skips it.
+  let receipt: ConsultReceipt | null = null;
+  if (paidViaX402?.settleTx) {
+    try {
+      receipt = await recordConsultReceiptOnChain({
+        godId,
+        question,
+        answer,
+        settleTxHash: paidViaX402.settleTx,
+        recipientPublicKeyHex: godPubkey,
+      });
+    } catch (e) {
+      // Don't fail the consult if the receipt write fails — the LLM work is
+      // done and the petitioner already paid. Surface the full chain error
+      // in logs (the casper-js-sdk error wraps the upstream payload).
+      const err = e as { message?: string; sourceErr?: unknown };
+      console.warn(
+        "[consult] receipt write failed:",
+        err.message,
+        JSON.stringify(err.sourceErr ?? {}),
+      );
+    }
+  }
+
+  // ─── 6. persist + respond ──────────────────────────────────────────────
   const paidAmount = isDemoAuthorized ? 0.0 : Number(requirements.amount) / 1_000_000;
   await sql`
-    INSERT INTO consultations (god_id, question, answer, paid_amount_usdc, payment_tx_hash, petitioner)
+    INSERT INTO consultations (
+      god_id, question, answer, paid_amount_usdc, payment_tx_hash, petitioner,
+      receipt_tx_hash, receipt_id_hex
+    )
     VALUES (
       ${godId},
       ${question},
       ${answer},
       ${paidAmount},
       ${paidViaX402?.settleTx ?? null},
-      ${paidViaX402?.payer ?? null}
+      ${paidViaX402?.payer ?? null},
+      ${receipt?.txHash ?? null},
+      ${receipt?.hashHex ?? null}
     );
   `;
 
@@ -208,6 +244,13 @@ export async function POST(
             network: requirements.network,
           }
         : { mode: "demo-bearer" },
+      receipt: receipt
+        ? {
+            txHash: receipt.txHash,
+            hashHex: receipt.hashHex,
+            transferId: receipt.transferId,
+          }
+        : null,
     }),
     { status: 200, headers },
   );

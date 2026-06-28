@@ -7,6 +7,10 @@ import {
   type ProphecyRow,
 } from "@/lib/god";
 import type { GodStats } from "@/lib/scoreboard";
+import {
+  getRecentConsultations,
+  type ConsultationRow,
+} from "@/lib/consultations";
 import { GOD_ACCENT, Sigil } from "../../_sigils";
 
 export const dynamic = "force-dynamic";
@@ -201,6 +205,52 @@ function ProphecyCard({ p }: { p: ProphecyRow }) {
   );
 }
 
+function ConsultationCard({ c }: { c: ConsultationRow }) {
+  const verified = !!c.receipt_tx_hash;
+  return (
+    <article className="rounded-sm border border-ink/15 bg-marble/70 p-5">
+      <p
+        className="text-lg italic leading-snug"
+        style={{ fontFamily: "var(--font-display)" }}
+      >
+        “{c.question}”
+      </p>
+      <p className="mt-3 text-sm leading-relaxed text-ink/70">{c.answer}</p>
+      <p className="mt-3 text-[11px] text-ink/40">
+        {fmtRelative(new Date(c.created_at))}
+        {c.petitioner && (
+          <>
+            {" "}· petitioner{" "}
+            <span className="font-mono">{short(c.petitioner)}</span>
+          </>
+        )}
+      </p>
+      {(c.payment_tx_hash || c.receipt_tx_hash) && (
+        <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-ink/40">
+          {c.payment_tx_hash && (
+            <TxLink label="x402 settle" hash={c.payment_tx_hash} />
+          )}
+          {c.receipt_tx_hash && (
+            <TxLink label="receipt" hash={c.receipt_tx_hash} />
+          )}
+          {verified && (
+            <span
+              className="rounded-full border border-laurel/40 bg-laurel/5 px-2 py-0.5 text-[10px] uppercase tracking-wider text-laurel"
+              title={
+                c.receipt_id_hex
+                  ? `keccak256(godId|question|answer|settleTx) = ${c.receipt_id_hex}`
+                  : ""
+              }
+            >
+              Receipt on chain
+            </span>
+          )}
+        </p>
+      )}
+    </article>
+  );
+}
+
 function TxLink({ label, hash }: { label: string; hash: string }) {
   return (
     <a
@@ -270,6 +320,7 @@ export default async function GodPage({
   const { stats, voice, allowedFeeds, recent } = detail;
   const meta = GODS[stats.id];
   const accent = GOD_ACCENT[stats.id];
+  const consultations = await getRecentConsultations(stats.id);
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-12">
@@ -349,6 +400,26 @@ export default async function GodPage({
           </ul>
         )}
       </section>
+
+      {consultations.length > 0 && (
+        <section className="mt-16">
+          <h2 className="text-xs uppercase tracking-[0.3em] text-amphora">
+            The Consultations
+          </h2>
+          <p className="mt-2 text-xs text-ink/50">
+            Petitioners&apos; questions answered, each bound to an on-chain
+            receipt — petitioner-signed proof that this answer was given for
+            this payment.
+          </p>
+          <ul className="mt-6 grid gap-4">
+            {consultations.map((c) => (
+              <li key={c.id}>
+                <ConsultationCard c={c} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <footer className="mt-24 border-t border-ink/10 pt-6 text-xs text-ink/50">
         On-chain links resolve to cspr.live. Reputation = 100 − mean Brier across

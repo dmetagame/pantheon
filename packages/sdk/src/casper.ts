@@ -16,6 +16,7 @@ const {
   HttpHandler,
   Key,
   KeyTypeID,
+  NativeTransferBuilder,
   PrivateKey,
   PublicKey,
   RpcClient,
@@ -682,4 +683,112 @@ export async function confirmProposalCreatedId(
     return readU64LE(raw, idOffset);
   }
   throw new Error(`ProposalCreated event not found in tx ${txHash}`);
+}
+
+// ─── consult receipts (Tier 2 v2) ─────────────────────────────────────────
+
+import { keccak_256 } from "@noble/hashes/sha3";
+
+/**
+ * Derive the deterministic receipt hash for a consultation. The same inputs
+ * always produce the same hash, so anyone with (godId, question, answer,
+ * settleTxHash) can recompute it and find the matching on-chain receipt.
+ *
+ * We use `keccak256` (the same hash casper-eip-712 ships) so the same digest
+ * is computable in any environment that already has the x402 dep tree.
+ */
+export function consultReceiptHash(
+  godId: string,
+  question: string,
+  answer: string,
+  settleTxHash: string,
+): Uint8Array {
+  const payload = `${godId}|${question}|${answer}|${settleTxHash}`;
+  return keccak_256(new TextEncoder().encode(payload));
+}
+
+/**
+ * Extract the lower 6 bytes (48 bits) of a 32-byte hash as a JS-safe integer
+ * for use as a native-transfer `id`. casper-js-sdk's NativeTransferBuilder.id()
+ * takes a JS `number` (capped at Number.MAX_SAFE_INTEGER = 2^53 − 1), so we
+ * stay under that ceiling. 48 bits of entropy is plenty for a single user —
+ * birthday collision odds are ~1 in 11M after a million receipts.
+ */
+export function receiptHashToTransferId(hash: Uint8Array): number {
+  if (hash.length < 6) throw new Error("receipt hash must be ≥ 6 bytes");
+  let id = 0;
+  for (let i = 0; i < 6; i++) {
+    id += hash[i] * 2 ** (8 * i);
+  }
+  return id;
+}
+
+export interface ConsultReceiptParams {
+  godId: string;
+  question: string;
+  answer: string;
+  settleTxHash: string;
+  /** God's public key (with algorithm prefix). The receipt goes to the god
+   *  as a tiny native CSPR tribute — Casper 2.x rejects self-transfers
+   *  with "Invalid purse". */
+  recipientPublicKeyHex: string;
+  /** Petitioner CSPR cost for the receipt write, defaults to 2.5 CSPR
+   *  (Casper testnet native-transfer payment minimum). */
+  paymentMotes?: bigint;
+  /** Receipt motes value sent in the transfer. Defaults to 2.5 CSPR —
+   *  the network rejects sub-minimum transfer amounts. */
+  receiptValueMotes?: bigint;
+}
+
+export interface ConsultReceipt {
+  txHash: string;
+  hashHex: string;
+  transferId: string;
+}
+
+/**
+ * Petitioner-signed on-chain receipt for a consultation. The petitioner
+ * issues a tiny self-transfer whose `id` is derived from the receipt hash.
+ * The transfer lands on chain as a verifiable attestation: "this account
+ * received this answer for this payment". Anyone with the off-chain
+ * (question, answer, settleTx) can recompute the hash and confirm the
+ * matching transfer-id on cspr.live without trusting our database.
+ */
+export async function recordConsultReceiptOnChain(
+  p: ConsultReceiptParams,
+): Promise<ConsultReceipt> {
+  const hash = consultReceiptHash(
+    p.godId,
+    p.question,
+    p.answer,
+    p.settleTxHash,
+  );
+  const transferId = receiptHashToTransferId(hash);
+  const hashHex = Array.from(hash, (b) => b.toString(16).padStart(2, "0")).join(
+    "",
+  );
+
+  const key = loadSigner("petitioner");
+  const client = loadClient();
+  const recipientPubKey = PublicKey.fromHex(p.recipientPublicKeyHex);
+  // NativeTransferBuilder.payment() takes a JS number; amount() takes a
+  // string-or-BigNumber CLUInt512; id() takes a JS number. Target must be a
+  // different account from the sender — Casper 2.x rejects self-transfers
+  // with "Invalid purse".
+  const tx = new NativeTransferBuilder()
+    .from(key.publicKey)
+    .chainName(CHAIN_NAME)
+    .payment(Number(p.paymentMotes ?? 2_500_000_000n))
+    .ttl(30 * 60 * 1000)
+    .target(recipientPubKey)
+    .amount((p.receiptValueMotes ?? 2_500_000_000n).toString())
+    .id(transferId)
+    .build();
+  await tx.sign(key);
+  const res = await client.putTransaction(tx);
+  return {
+    txHash: res.transactionHash.toHex(),
+    hashHex,
+    transferId: String(transferId),
+  };
 }
