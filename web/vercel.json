@@ -4,7 +4,7 @@
     { "path": "/api/cron/prophesy/demeter", "schedule": "0 9 * * *" },
     { "path": "/api/cron/prophesy/hermes", "schedule": "5 9 * * *" },
     { "path": "/api/cron/prophesy/apollo", "schedule": "10 9 * * *" },
-    { "path": "/api/cron/settle", "schedule": "*/15 * * * *" },
-    { "path": "/api/cron/sweep", "schedule": "*/30 * * * *" }
+    { "path": "/api/cron/settle", "schedule": "30 9 * * *" },
+    { "path": "/api/cron/sweep", "schedule": "45 9 * * *" }
   ]
 }
