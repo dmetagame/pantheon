@@ -148,6 +148,12 @@ export default async function Home() {
                     △ {fmtTreasury(god.treasuryMotes)}
                   </p>
                 </div>
+                <p className="mt-2 text-[10px] uppercase tracking-wider text-ink/40">
+                  Consult{" "}
+                  <span className={`tabular-nums ${accent.text} opacity-90`}>
+                    {fmtTreasury(god.consultPriceMotes)}
+                  </span>
+                </p>
               </Link>
             </li>
             );

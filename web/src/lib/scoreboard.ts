@@ -1,5 +1,6 @@
 import { getFungibleBalance } from "@pantheon/agents";
 import sql from "./db";
+import { basePriceMotes, priceFromReputation } from "./pricing";
 
 export interface GodStats {
   id: "demeter" | "hermes" | "apollo";
@@ -14,6 +15,8 @@ export interface GodStats {
   publicKey: string | null;
   /** WCSPR (or configured x402 asset) treasury balance in atomic motes. */
   treasuryMotes: string;
+  /** Current consult price in atomic motes (scaled by reputation). */
+  consultPriceMotes: string;
 }
 
 const GOD_META: Record<GodStats["id"], Pick<GodStats, "name" | "title" | "domain">> = {
@@ -53,6 +56,27 @@ function foldEwma(samples: number[]): number {
     acc = Math.floor((ALPHA_BP * samples[i] + (10_000 - ALPHA_BP) * acc) / 10_000);
   }
   return acc;
+}
+
+/**
+ * Single-god reputation lookup. Same EWMA fold as getScoreboard, but only one
+ * SQL query and no cspr.cloud calls — cheap enough to run on every consult.
+ */
+export async function getReputationBp(id: GodStats["id"]): Promise<number> {
+  const rows = (await sql`
+    SELECT
+      ARRAY_AGG(brier_bp ORDER BY settled_at)
+        FILTER (WHERE settled_at IS NOT NULL AND brier_bp IS NOT NULL) AS brier_history,
+      COUNT(*) FILTER (WHERE settled_at IS NOT NULL)::int AS prophecies_settled
+    FROM prophecies
+    WHERE god_id = ${id};
+  `) as unknown as Array<{
+    brier_history: number[] | null;
+    prophecies_settled: number;
+  }>;
+  const r = rows[0];
+  if (!r || r.prophecies_settled === 0) return 0;
+  return 10_000 - foldEwma(r.brier_history ?? []);
 }
 
 function godPublicKey(id: GodStats["id"]): string | null {
@@ -96,19 +120,22 @@ export async function getScoreboard(): Promise<GodStats[]> {
   const treasuries = await Promise.all(
     ids.map((id) => fetchTreasury(godPublicKey(id))),
   );
+  const base = basePriceMotes();
   return ids.map((id, i) => {
     const r = byId.get(id);
     const ewmaBrier = foldEwma(r?.brier_history ?? []);
+    const reputationBp =
+      r && r.prophecies_settled > 0 ? 10_000 - ewmaBrier : 0;
     return {
       id,
       ...GOD_META[id],
-      reputationBp:
-        r && r.prophecies_settled > 0 ? 10_000 - ewmaBrier : 0,
+      reputationBp,
       prophecies_settled: r?.prophecies_settled ?? 0,
       prophecies_pending: r?.prophecies_pending ?? 0,
       last_prophecy_at: r?.last_prophecy_at ?? null,
       publicKey: godPublicKey(id),
       treasuryMotes: treasuries[i].toString(),
+      consultPriceMotes: priceFromReputation(reputationBp, base).toString(),
     };
   });
 }

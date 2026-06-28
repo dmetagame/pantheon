@@ -84,6 +84,17 @@ function TreasuryStrip({
           {fmtTreasury(stats.treasuryMotes)}
         </p>
       </div>
+      <div>
+        <p className="text-[10px] uppercase tracking-wider text-ink/50">
+          Consult price
+        </p>
+        <p
+          className={`mt-1 text-base font-medium tabular-nums ${accentText}`}
+          title="Linearly scaled by reputation. New oracles are cheap; calibrated oracles cost more."
+        >
+          {fmtTreasury(stats.consultPriceMotes)}
+        </p>
+      </div>
       <a
         href={`${ACCOUNT_EXPLORER}/${stats.publicKey}`}
         target="_blank"

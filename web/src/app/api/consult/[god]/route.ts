@@ -9,6 +9,8 @@ import {
   type PaymentRequirements,
 } from "@pantheon/sdk";
 import sql from "@/lib/db";
+import { getReputationBp } from "@/lib/scoreboard";
+import { basePriceMotes, priceFromReputation } from "@/lib/pricing";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -34,10 +36,21 @@ export async function POST(
   }
 
   const resourceUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3030"}/api/consult/${godId}`;
+
+  // Reputation-gated pricing: calibrated gods cost more, untested gods are
+  // cheap. The petitioner reads the price from the 402 envelope and signs
+  // for it directly — no separate price negotiation step.
+  const reputationBp = await getReputationBp(godId as GodId);
+  const priceMotes = priceFromReputation(reputationBp, basePriceMotes());
+  const description =
+    `Tithe to ${GODS[godId as GodId].name} for one prophecy consultation. ` +
+    `Reputation ${(reputationBp / 100).toFixed(1)}% sets the price.`;
+
   const requirements: PaymentRequirements = buildAcceptsEnvelope({
     godPublicKeyHex: godPubkey,
     resourceUrl,
-    description: `Tithe to ${GODS[godId].name} for one prophecy consultation.`,
+    description,
+    amount: priceMotes.toString(),
   }).accepts[0]!;
 
   // ─── 1. payment gate ───────────────────────────────────────────────────
@@ -60,7 +73,8 @@ export async function POST(
           buildAcceptsEnvelope({
             godPublicKeyHex: godPubkey,
             resourceUrl,
-            description: `Tithe to ${GODS[godId].name} for one prophecy consultation.`,
+            description,
+            amount: priceMotes.toString(),
           }),
         ),
         {
