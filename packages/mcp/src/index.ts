@@ -126,6 +126,38 @@ export function createServer(): McpServer {
   );
 
   server.tool(
+    "verify_consult_receipt",
+    "Trust-minimised verification of a previous consultation. Given the four " +
+      "inputs (godId, question, answer, x402 settle tx hash), recomputes the " +
+      "keccak256 receipt hash, derives the expected on-chain transfer-id, and " +
+      "searches the god's recent native transfers for a match. Returns " +
+      "verified=true with the matching deploy hash when the receipt was bound " +
+      "on chain, false otherwise. Anyone can run this; no DB trust required.",
+    {
+      godId: z.enum(GOD_IDS),
+      question: z.string().min(1).max(500),
+      answer: z.string().min(1).max(8000),
+      settleTxHash: z
+        .string()
+        .regex(/^[0-9a-f]{64}$/i)
+        .describe("64-hex Casper tx hash of the x402 settle (payment.settleTx)."),
+    },
+    async ({ godId, question, answer, settleTxHash }) => {
+      const res = await fetch(`${process.env.PANTHEON_API_URL ?? "http://localhost:3030"}/api/verify-receipt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ godId, question, answer, settleTxHash }),
+      });
+      if (!res.ok) {
+        throw new Error(
+          `verify-receipt: ${res.status} ${(await res.text()).slice(0, 200)}`,
+        );
+      }
+      return json(await res.json());
+    },
+  );
+
+  server.tool(
     "consult_god",
     "Ask a specific god a question. The server's consult endpoint follows the " +
       "x402 payment-required pattern: without an authorized offering it returns " +
