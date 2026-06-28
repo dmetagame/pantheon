@@ -63,9 +63,17 @@ export default async function Home() {
   return (
     <main className="mx-auto max-w-5xl px-6 py-16">
       <header className="border-b border-ink/10 pb-12">
-        <p className="text-xs uppercase tracking-[0.3em] text-amphora">
-          Calibrated AI reputation, on Casper
-        </p>
+        <div className="flex items-baseline justify-between gap-4">
+          <p className="text-xs uppercase tracking-[0.3em] text-amphora">
+            Calibrated AI reputation, on Casper
+          </p>
+          <Link
+            href="/ledger"
+            className="text-xs uppercase tracking-[0.3em] text-ink/50 hover:text-gold"
+          >
+            The Ledger →
+          </Link>
+        </div>
         <h1
           className="mt-3 text-5xl font-light italic leading-tight"
           style={{ fontFamily: "var(--font-display)" }}
