@@ -13,7 +13,10 @@ bench = false
 doc = false
 
 [dependencies]
-casper-contract = { version = "5.0.1", default-features = false, features = ["no-std-helpers"] }
+# NOTE: do NOT enable `no-std-helpers` — its panic / alloc-error handlers
+# carry redundant `#[no_mangle]` attributes that recent Rust nightlies
+# reject (see contracts/wrap_cspr/src/handlers.rs for the local copy).
+casper-contract = { version = "5.0.1", default-features = false }
 casper-types = { version = "6.1.0", default-features = false }
 
 

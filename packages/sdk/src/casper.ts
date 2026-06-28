@@ -525,35 +525,9 @@ function bytesreprBytes(b: Uint8Array): Uint8Array {
   return concat(u32LE(b.length), b);
 }
 
-/**
- * Encode `PriestQuorum::ProposalKind::Custom { tag, payload }` as Odra's
- * bytesrepr. Variant indices (in declaration order):
- *   0 = WithdrawUsdc, 1 = LiquidateTemple, 2 = UpdateStrategy, 3 = Custom.
- */
-function encodeCustomProposalKind(tag: string, payload: Uint8Array): Uint8Array {
-  const VARIANT_CUSTOM = 3;
-  return concat(
-    new Uint8Array([VARIANT_CUSTOM]),
-    bytesreprString(tag),
-    bytesreprBytes(payload),
-  );
-}
-
-/**
- * Pantheon's settlement payload: (prophecy_id u64 LE, truth u8, source_value String).
- * Stored inside ProposalKind::Custom { tag: "SettleProphecy", payload }.
- */
-function encodeSettlementPayload(
-  prophecyId: bigint,
-  truth: boolean,
-  sourceValue: string,
-): Uint8Array {
-  return concat(
-    u64LE(prophecyId),
-    new Uint8Array([truth ? 1 : 0]),
-    bytesreprString(sourceValue),
-  );
-}
+// Encoding helpers for ProposalKind variants were removed when the contract
+// gained typed entry points (`propose_settle`) — callers pass strongly-typed
+// runtime args directly via Args.fromMap instead of byte-packing.
 
 export interface RegisterGodParams {
   godId: string;
@@ -632,28 +606,31 @@ export interface ProposeSettlementParams {
 }
 
 /**
- * God-signed call to PriestQuorum.propose with kind = Custom {
- *   tag: "SettleProphecy", payload: bytesrepr(prophecyId, truth, sourceValue)
- * }. The on-chain ProposalKind enum's `Custom` variant lets us encode the
- * settlement decision without expanding the contract ABI. The off-chain
- * orchestrator decodes the same payload when finalising
+ * God-signed call to `PriestQuorum.propose_settle` — the typed entry-point
+ * that internally constructs `ProposalKind::SettleProphecy { prophecy_id,
+ * truth, source_value }` and forwards to `propose`. Self-documenting on
+ * cspr.live (callers no longer need to decode our private bytesrepr layout
+ * for the Custom variant) while preserving the exact same auth semantics:
+ * caller must be the god or priest registered for `godId`. The off-chain
+ * orchestrator picks up the resulting ProposalCreated event when finalising
  * ProphecyRegistry.settle.
  */
 export async function proposeSettlementOnChain(
   p: ProposeSettlementParams,
 ): Promise<string> {
-  const payload = encodeSettlementPayload(p.prophecyId, p.truth, p.sourceValue);
-  const kindBytes = encodeCustomProposalKind("SettleProphecy", payload);
   const args = Args.fromMap({
     god_id: CLValue.newCLString(p.godId),
-    // ProposalKind is an `#[odra::odra_type]` enum; its CLType is `Any` so we
-    // pass the bytesrepr-encoded variant as a CL_Any value.
-    kind: CLValue.newCLAny(kindBytes),
+    prophecy_id: CLValue.newCLUint64(p.prophecyId),
+    truth: CLValue.newCLValueBool(p.truth),
+    source_value: CLValue.newCLString(p.sourceValue),
   });
   return send(
     p.godId as SignerName,
     (b) =>
-      b.byPackageHash(priestQuorumHash()).entryPoint("propose").runtimeArgs(args),
+      b
+        .byPackageHash(priestQuorumHash())
+        .entryPoint("propose_settle")
+        .runtimeArgs(args),
     3_500_000_000,
   );
 }

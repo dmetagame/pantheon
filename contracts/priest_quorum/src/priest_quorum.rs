@@ -41,6 +41,16 @@ pub enum ProposalKind {
     UpdateStrategy { uri: String },
     /// Reserved generic payload for forward-compat.
     Custom { tag: String, payload: Bytes },
+    /// Settle a prophecy with a god-asserted truth + the oracle reading that
+    /// backs it. Off-chain orchestrator picks this up and calls
+    /// `ProphecyRegistry.settle(prophecy_id, truth, source_value)` once the
+    /// priest co-signs. `source_value` is the human-readable oracle reading
+    /// (e.g. `"0.9994 USDC"`); the truth bit is what's reputation-binding.
+    SettleProphecy {
+        prophecy_id: u64,
+        truth: bool,
+        source_value: String,
+    },
 }
 
 #[odra::odra_type]
@@ -130,6 +140,27 @@ impl PriestQuorum {
             self.env().revert(Error::InvalidTtl);
         }
         self.default_ttl_ms.set(ttl);
+    }
+
+    /// Convenience entry-point for the most common case: a god proposing a
+    /// prophecy settlement. Constructs `ProposalKind::SettleProphecy { … }`
+    /// and forwards to `propose`, so the caller doesn't need to hand-encode
+    /// the variant as bytes. Same auth + return semantics as `propose`.
+    pub fn propose_settle(
+        &mut self,
+        god_id: String,
+        prophecy_id: u64,
+        truth: bool,
+        source_value: String,
+    ) -> u64 {
+        self.propose(
+            god_id,
+            ProposalKind::SettleProphecy {
+                prophecy_id,
+                truth,
+                source_value,
+            },
+        )
     }
 
     /// God or priest proposes an action. The proposer's slot is auto-approved.
@@ -373,6 +404,55 @@ mod tests {
 
         env.set_caller(priest);
         let res = q.try_approve(id);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn propose_settle_round_trip() {
+        let (env, mut q, god, priest, _) = setup();
+
+        env.set_caller(god);
+        let id = q.propose_settle(
+            "demeter".to_string(),
+            42,
+            true,
+            "0.9994 USDC".to_string(),
+        );
+
+        let p = q.get_proposal(id).unwrap();
+        assert!(p.god_approved);
+        assert!(!p.priest_approved);
+        match p.kind {
+            ProposalKind::SettleProphecy {
+                prophecy_id,
+                truth,
+                source_value,
+            } => {
+                assert_eq!(prophecy_id, 42);
+                assert!(truth);
+                assert_eq!(source_value, "0.9994 USDC".to_string());
+            }
+            _ => panic!("expected SettleProphecy variant"),
+        }
+
+        env.set_caller(priest);
+        q.approve(id);
+        env.set_caller(env.get_account(0));
+        q.execute(id);
+        let p = q.get_proposal(id).unwrap();
+        assert!(p.executed);
+    }
+
+    #[test]
+    fn propose_settle_outsider_reverts() {
+        let (env, mut q, _, _, _) = setup();
+        env.set_caller(env.get_account(4));
+        let res = q.try_propose_settle(
+            "demeter".to_string(),
+            1,
+            false,
+            "n/a".to_string(),
+        );
         assert!(res.is_err());
     }
 

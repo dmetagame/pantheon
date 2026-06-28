@@ -4054,6 +4054,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wrap_cspr"
+version = "0.1.0"
+dependencies = [
+ "casper-contract",
+ "casper-types",
+]
+
+[[package]]
 name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

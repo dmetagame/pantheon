@@ -63,14 +63,42 @@ pnpm exec tsx --env-file=.env.local scripts/migrate.ts
 
 ## 6. Build + deploy the contracts (one-time, or after source changes)
 
+Casper's 2.x WASM interpreter accepts only MVP-shape wasm — no
+`bulk-memory`, no sign-ext. The Odra contracts build cleanly against
+`wasm32-unknown-unknown` through `cargo odra build` thanks to the
+rustflags in `contracts/.cargo/config.toml`. `wrap_cspr` (the session
+WASM that calls casper-contract directly) needs the stricter
+`wasm32v1-none` target plus `build-std`, exposed via the `wasm-build`
+cargo alias.
+
+One-time:
+
+```sh
+rustup install nightly-2026-01-01
+rustup target add wasm32v1-none --toolchain nightly-2026-01-01
+rustup component add rust-src --toolchain nightly-2026-01-01
+```
+
+Build:
+
 ```sh
 cd contracts
-cargo build --release         # builds host code
-# build wasm targets via Odra's bin entry-points
-cargo build --release --target wasm32-unknown-unknown \
-  -p prophecy -p reputation -p priest_quorum
-# strip + (optionally) lower bulk-memory ops
-wasm-strip wasm/ProphecyRegistry.wasm   # repeat per artifact
+cargo +nightly-2026-01-01 odra build \
+  -c "ProphecyRegistry Reputation PriestQuorum"
+cargo +nightly-2026-01-01 wasm-build -p wrap_cspr --bin wrap_cspr
+cp target/wasm32v1-none/release/wrap_cspr.wasm wasm/WrapCspr.wasm
+wasm-strip wasm/*.wasm
+```
+
+Verify MVP-shape (optional sanity check using
+[wabt](https://github.com/WebAssembly/wabt)):
+
+```sh
+wasm-validate \
+  --disable-bulk-memory --disable-sign-extension --disable-multi-value \
+  --disable-reference-types --disable-saturating-float-to-int \
+  --disable-mutable-globals \
+  wasm/PriestQuorum.wasm wasm/WrapCspr.wasm
 ```
 
 Deploy via the CLI binary in `cli/`:
@@ -91,11 +119,11 @@ After deploy the CLI prints each package hash. Paste them into
   (latest contract version hash, not the package hash)
 - `PRIEST_QUORUM_HASH`
 
-> ⚠️ Casper testnet's interpreter rejects `bulk-memory` ops emitted by
-> recent Rust nightlies. The published `priest_quorum` source is the
-> deployed shape that works (generic `Custom { tag, payload }` variant for
-> SettleProphecy). Redeploying with a typed `SettleProphecy` variant is
-> blocked on a wasm-toolchain investigation tracked in the v2 backlog.
+> ⚠️ The PriestQuorum contract exposes a typed `propose_settle(god_id,
+> prophecy_id, truth, source_value)` entry point (with the matching
+> `ProposalKind::SettleProphecy` variant) — `packages/sdk` calls that
+> entry, not the generic `propose` with a Custom-variant payload.
+> Redeployment is required after pulling source changes.
 
 ## 7. Register on-chain identities
 
@@ -152,9 +180,10 @@ keypair and account hash but starts with no WCSPR. Two paths to fund it:
    Wallet browser extension, connect to `testnet.cspr.trade`, and wrap some
    of the petitioner's CSPR → WCSPR via the cspr.trade UI. Done once;
    petitioner can do hundreds of consults from a small bag.
-2. **Programmatic.** On the v2 roadmap. WCSPR's `deposit` entry-point takes
-   a purse URef created via a `pre_deposit` step — a session-deploy pattern
-   that needs custom Rust WASM.
+2. **Programmatic.** `contracts/wrap_cspr` is a session WASM that creates
+   a purse, transfers `amount` motes, and calls `WCSPR.deposit` in one
+   deploy. Build with the steps in §6, then deploy as a session with
+   `wcspr_package_hash` + `amount` runtime args from the petitioner.
 
 ## Rate limits + structured logs
 

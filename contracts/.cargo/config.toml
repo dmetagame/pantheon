@@ -1,9 +1,33 @@
-# Casper Testnet's WASM interpreter does not support the bulk-memory
-# proposal. Recent Rust nightlies enable it by default for wasm32 —
-# disable it here so Odra contracts deploy successfully.
+# Casper 2.x WASM interpreter expects MVP-only wasm — no bulk-memory,
+# no sign-ext. We use the `wasm32v1-none` target which has these
+# disabled by default at the spec level, then layer `build-std` so
+# `core` / `alloc` get recompiled with the same flags (otherwise the
+# pre-shipped stdlib rlibs sneak post-MVP ops back in through LTO).
+
 [target.wasm32-unknown-unknown]
 rustflags = [
   "-C", "target-feature=-bulk-memory",
   "-C", "target-feature=-sign-ext",
   "-C", "link-arg=--export-table",
 ]
+
+[target.wasm32v1-none]
+rustflags = [
+  # `bulk-memory-opt` is the LLVM-level codegen flag that controls
+  # memset → memory.fill lowering; disabling `bulk-memory` alone
+  # leaves it on. Disable both, plus sign-ext for belt-and-braces.
+  "-C", "target-feature=-bulk-memory,-bulk-memory-opt,-sign-ext",
+  "-C", "link-arg=--export-table",
+]
+
+# Build-std escape hatch for wasm32v1-none — recompiles core/alloc
+# from source so the rustflags above propagate through the entire dep
+# closure. Used by wrap_cspr (the session WASM that calls casper-contract
+# directly), where wasm32-unknown-unknown leaks `memory.copy` ops. The
+# Odra contracts (Prophecy/Reputation/PriestQuorum) build cleanly against
+# wasm32-unknown-unknown via `cargo odra build`, so they don't need this.
+# It can't be a global `[unstable]` block because that also tries to
+# recompile the host's `std` for `cargo test`, which collides with the
+# toolchain's prebuilt rlibs.
+[alias]
+wasm-build = "build --release --target wasm32v1-none -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem"

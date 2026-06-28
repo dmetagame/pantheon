@@ -1,49 +1,51 @@
-# wrap_cspr — session WASM (v2, blocked)
+# wrap_cspr — session WASM
 
 A single-deploy programmatic wrap of native CSPR into Wrapped CSPR. The
-petitioner would deploy this session WASM with `amount` + `wcspr_package_hash`
-runtime args and it would:
+petitioner deploys this session WASM with `amount` + `wcspr_package_hash`
+runtime args and it:
 
-1. Create a temporary purse via `system::create_purse()`
-2. Transfer `amount` motes from the caller's main purse to the temporary purse
-3. Call `WCSPR.deposit(purse: URef)` with the temporary purse
+1. Creates a temporary purse via `system::create_purse()`
+2. Transfers `amount` motes from the caller's main purse to the temporary purse
+3. Calls `WCSPR.deposit(purse: URef)` with the temporary purse
 
-That closes the only remaining manual step in the petitioner demo flow
-(today the petitioner needs `testnet.cspr.trade` to wrap CSPR → WCSPR via
-the UI before x402 settlements can fire).
+That closes the last manual step in the petitioner demo flow — today the
+petitioner needs `testnet.cspr.trade` to wrap CSPR → WCSPR via the UI before
+x402 settlements can fire.
 
-## Status: blocked on Rust nightly toolchain
+## Build
 
-`cargo build --release --target wasm32-unknown-unknown -p wrap_cspr`
-currently fails inside `casper-contract` 5.1's `no_std_handlers.rs`:
+```sh
+cd contracts
+cargo +nightly-2026-01-01 build --release --target wasm32v1-none -p wrap_cspr
+wasm-strip target/wasm32v1-none/release/wrap_cspr.wasm
+```
+
+The result is ~14 KB of pure MVP wasm (no bulk-memory, no sign-ext,
+verified via `wasm-validate --disable-bulk-memory --disable-sign-extension
+--disable-multi-value --disable-reference-types
+--disable-saturating-float-to-int --disable-mutable-globals`).
+
+## Why we wrote our own no-std handlers
+
+`casper-contract` 5.1.1's `no_std_handlers.rs` puts redundant
+`#[no_mangle]` attributes on `#[panic_handler]` and
+`#[alloc_error_handler]`. Recent Rust nightlies reject this with:
 
 ```
 error: `#[no_mangle]` cannot be used on internal language items
- --> casper-contract-5.1.1/src/no_std_handlers.rs:5:1
-  |
-5 | #[no_mangle]
-  | ^^^^^^^^^^^^
 ```
 
-This is the same class of Rust-nightly / wasm-target incompatibility that
-blocks the PriestQuorum redeploy with the typed `SettleProphecy` variant.
-Resolution paths (in order of effort):
+So the crate is depended on without the `no-std-helpers` feature, and
+`src/main.rs` carries a minimal bump allocator plus its own panic /
+alloc-error handlers.
 
-1. Try an older nightly (e.g. `nightly-2025-09-01`) where
-   `casper-contract`'s `no_mangle`-on-`rust_begin_unwind` still compiled.
-2. Patch `casper-contract` locally to use the new
-   `#[lang = "panic_impl"]` form.
-3. Switch the contract dep to a community-maintained fork that's already
-   patched.
+## Deploy flow
 
-The session source in `src/main.rs` is otherwise complete; once the
-toolchain issue resolves, the path forward is:
+`packages/petitioner/src/petition.ts` checks the petitioner's WCSPR
+balance on startup. If it's below threshold, it does a `SessionBuilder`
+deploy of `wrap_cspr.wasm` with:
 
-1. `cargo build --release --target wasm32-unknown-unknown -p wrap_cspr`
-2. `wasm-strip target/wasm32-unknown-unknown/release/wrap_cspr.wasm`
-3. Petitioner CLI does a `SessionBuilder` deploy with the stripped WASM
-   passing `amount: U512` + `wcspr_package_hash: ContractPackageHash`.
+- `wcspr_package_hash: ContractPackageHash`
+- `amount: U512`
 
-`packages/petitioner/src/petition.ts` would then check the petitioner's
-WCSPR balance on startup and run a wrap if it's below threshold — fully
-autonomous demo, no manual step.
+— fully autonomous; no manual `testnet.cspr.trade` step.
