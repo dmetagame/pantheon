@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getLedger, type LedgerEntry, type LedgerKind } from "@/lib/ledger";
 import { GODS, type GodId } from "@pantheon/agents";
 import { GOD_ACCENT } from "../_sigils";
+import { LiveLedger, type LedgerEntryWire } from "./_live";
 
 export const dynamic = "force-dynamic";
 
@@ -132,11 +133,21 @@ export default async function LedgerPage() {
           No on-chain activity yet. The Pantheon is silent.
         </p>
       ) : (
-        <ul className="mt-6">
-          {entries.map((e, i) => (
-            <Row key={`${e.tx_hash}-${i}`} e={e} />
-          ))}
-        </ul>
+        <div className="mt-6">
+          <LiveLedger
+            initial={entries.map(
+              (e): LedgerEntryWire => ({
+                ts: e.ts.toISOString(),
+                god_id: e.god_id,
+                kind: e.kind,
+                tx_hash: e.tx_hash,
+                detail: e.detail,
+                prophecy_id: e.prophecy_id ?? null,
+                consult_id: e.consult_id ?? null,
+              }),
+            )}
+          />
+        </div>
       )}
 
       <footer className="mt-16 border-t border-ink/10 pt-6 text-xs text-ink/50">
