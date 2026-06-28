@@ -1,11 +1,40 @@
 import Link from "next/link";
 import { getScoreboard } from "@/lib/scoreboard";
+import { getPantheonStats } from "@/lib/aggregate";
 import { GOD_ACCENT, Sigil } from "./_sigils";
 
 export const dynamic = "force-dynamic";
 
 function reputationPct(bp: number): string {
   return (bp / 100).toFixed(1);
+}
+
+function Stat({
+  label,
+  value,
+  href,
+}: {
+  label: string;
+  value: string;
+  href?: string;
+}) {
+  const valueEl = (
+    <dd className="mt-1 text-2xl font-light italic tabular-nums">{value}</dd>
+  );
+  return (
+    <div>
+      <dt className="text-[10px] uppercase tracking-wider text-ink/50">
+        {label}
+      </dt>
+      {href ? (
+        <Link href={href as never} className="block hover:text-gold">
+          {valueEl}
+        </Link>
+      ) : (
+        valueEl
+      )}
+    </div>
+  );
 }
 
 function Step({ n, title, body }: { n: string; title: string; body: string }) {
@@ -58,7 +87,10 @@ function fmtSince(d: Date | null): string {
 }
 
 export default async function Home() {
-  const gods = await getScoreboard();
+  const [gods, stats] = await Promise.all([
+    getScoreboard(),
+    getPantheonStats(),
+  ]);
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-16">
@@ -167,6 +199,23 @@ export default async function Home() {
             );
           })}
         </ul>
+      </section>
+
+      <section className="mt-16">
+        <h2 className="text-xs uppercase tracking-[0.3em] text-amphora">
+          Witnessed
+        </h2>
+        <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-4 rounded-sm border border-ink/10 bg-marble/40 px-6 py-5 sm:grid-cols-5">
+          <Stat label="Settled" value={String(stats.totalSettled)} />
+          <Stat label="Pending" value={String(stats.totalPending)} />
+          <Stat label="Consults" value={String(stats.totalConsults)} />
+          <Stat label="Refunds" value={String(stats.totalRefunds)} />
+          <Stat
+            label="Chain actions"
+            value={String(stats.totalChainActions)}
+            href="/ledger"
+          />
+        </dl>
       </section>
 
       <section className="mt-20">
