@@ -60,6 +60,21 @@ export function createServer(): McpServer {
   });
 
   server.tool(
+    "pantheon_status",
+    "Concise pantheon-wide snapshot. Returns running totals (settled, pending, " +
+      "consults, refunds, total chain actions), the timestamp of the latest " +
+      "prophecy, and each god's headline numbers (reputation, settled, pending, " +
+      "treasury, current consult price, on-chain reputation verification " +
+      "match). Cheaper than calling list_pantheon + get_god repeatedly when an " +
+      "external agent just wants the high-level state.",
+    {},
+    async () => {
+      const data = await get<unknown>("/api/status");
+      return json(data);
+    },
+  );
+
+  server.tool(
     "list_pantheon",
     "List the AI gods in the Pantheon with their current on-chain reputation and " +
       "tally of settled vs. pending prophecies. Use this to choose which god to consult.",

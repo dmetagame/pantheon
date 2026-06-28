@@ -228,6 +228,97 @@ function printStep(step: StepLike, idx: number): void {
 
 // ─── main ────────────────────────────────────────────────────────────────
 
+interface ConsultOutcome {
+  god?: string;
+  reputationBp?: number;
+  paymentSettleTx?: string;
+  paymentAmountMotes?: string;
+  receiptTxHash?: string;
+  receiptHashHex?: string;
+  payer?: string;
+}
+
+const EXPLORER_DEPLOY = "https://cspr.live/deploy";
+const EXPLORER_ACCOUNT = "https://testnet.cspr.live/account";
+
+function extractConsultOutcome(steps: StepLike[]): ConsultOutcome {
+  const out: ConsultOutcome = {};
+  for (const step of steps) {
+    for (const tr of step.toolResults ?? []) {
+      const r = (tr.output ?? tr.result) as Record<string, unknown> | undefined;
+      if (!r) continue;
+      if (tr.toolName === "consult_god" && typeof r.answer === "string") {
+        out.god = String(r.god ?? "");
+        const payment = r.payment as Record<string, unknown> | undefined;
+        if (payment) {
+          out.paymentSettleTx = String(payment.settleTx ?? "");
+          out.paymentAmountMotes = String(payment.amount ?? "");
+        }
+        const receipt = r.receipt as Record<string, unknown> | undefined;
+        if (receipt) {
+          out.receiptTxHash = String(receipt.txHash ?? "");
+          out.receiptHashHex = String(receipt.hashHex ?? "");
+        }
+        out.payer = (r.signedAs as string | undefined) ?? out.payer;
+      }
+      if (tr.toolName === "list_pantheon" && Array.isArray(r)) {
+        const list = r as Array<Record<string, unknown>>;
+        for (const g of list) {
+          if (out.god && g.id === out.god) {
+            out.reputationBp = Number(g.reputationBp ?? 0);
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function fmtMotes(motes: string | undefined, symbol = "WCSPR", decimals = 9): string {
+  if (!motes) return "—";
+  const v = BigInt(motes);
+  const d = 10n ** BigInt(decimals);
+  const whole = v / d;
+  const frac = v % d;
+  const fracStr = frac
+    .toString()
+    .padStart(decimals, "0")
+    .slice(0, 4)
+    .replace(/0+$/, "");
+  return fracStr ? `${whole}.${fracStr} ${symbol}` : `${whole} ${symbol}`;
+}
+
+function printOnChainProof(outcome: ConsultOutcome): void {
+  // Only print the section if we actually have a real payment to surface;
+  // skips on demo-bearer / 402 paths.
+  if (!outcome.paymentSettleTx && !outcome.receiptTxHash) return;
+  console.log(`╔═══ On-chain proof ═══╗`);
+  if (outcome.god) {
+    console.log(`  God consulted     ${outcome.god}`);
+  }
+  if (outcome.reputationBp !== undefined) {
+    console.log(`  Trusted at        ${(outcome.reputationBp / 100).toFixed(2)}% on-chain reputation`);
+  }
+  if (outcome.paymentSettleTx) {
+    console.log(`  x402 settle       ${EXPLORER_DEPLOY}/${outcome.paymentSettleTx}`);
+    if (outcome.paymentAmountMotes) {
+      console.log(`    amount          ${fmtMotes(outcome.paymentAmountMotes)}`);
+    }
+  }
+  if (outcome.receiptTxHash) {
+    console.log(`  Receipt           ${EXPLORER_DEPLOY}/${outcome.receiptTxHash}`);
+    if (outcome.receiptHashHex) {
+      console.log(
+        `    keccak256       ${outcome.receiptHashHex.slice(0, 16)}…${outcome.receiptHashHex.slice(-8)}`,
+      );
+    }
+  }
+  if (outcome.payer) {
+    console.log(`  Petitioner        ${EXPLORER_ACCOUNT}/${outcome.payer}`);
+  }
+  console.log(`╚══════════════════════╝\n`);
+}
+
 export async function runPetition(question: string): Promise<{ final: string }> {
   const { text, steps } = await generateText({
     model: gateway(MODEL),
@@ -245,6 +336,9 @@ export async function runPetition(question: string): Promise<{ final: string }> 
   console.log(`\n╔═══ Final Report ═══╗`);
   console.log(text);
   console.log(`╚════════════════════╝\n`);
+
+  const outcome = extractConsultOutcome(steps as StepLike[]);
+  printOnChainProof(outcome);
 
   return { final: text };
 }
