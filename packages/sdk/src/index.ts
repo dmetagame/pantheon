@@ -9,6 +9,7 @@ export {
   loadSigner,
   loadClient,
   generateEd25519Key,
+  generateKey,
   keyInfoFromPem,
   setPriesthoodOnChain,
   proposeSettlementOnChain,
@@ -26,3 +27,23 @@ export type {
   ProposeSettlementParams,
   ApproveProposalParams,
 } from "./casper";
+
+export {
+  buildAcceptsEnvelope,
+  decodePaymentHeader,
+  pubkeyToAccountHash,
+  pubkeyToAccountKeyHex,
+  signPaymentPayload,
+  verifyOnFacilitator,
+  settleOnFacilitator,
+} from "./x402";
+export type {
+  AcceptsEnvelope,
+  PaymentPayload,
+  PaymentRequirements,
+  SettleResponse,
+  TransferAuthorization,
+  VerifyResponse,
+  BuildAcceptsOpts,
+  BuildAndSignOpts,
+} from "./x402";

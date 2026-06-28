@@ -13,10 +13,20 @@
 import { generateText, stepCountIs, tool } from "ai";
 import { gateway } from "@ai-sdk/gateway";
 import { z } from "zod";
+import {
+  loadSigner,
+  signPaymentPayload,
+  type AcceptsEnvelope,
+} from "@pantheon/sdk";
 
 const API_BASE = process.env.PANTHEON_API_URL ?? "http://localhost:3030";
 const CONSULT_SECRET = process.env.PANTHEON_CONSULT_SECRET;
 const MODEL = process.env.PETITIONER_MODEL ?? "anthropic/claude-haiku-4-5";
+
+// If true, the petitioner attempts to sign + pay via real Casper x402 on a
+// 402 response. Off by default until CEP18 token funding is resolved; the
+// petitioner falls back to the demo bearer.
+const X402_ENABLED = process.env.PETITIONER_X402 === "1";
 
 const GOD_IDS = ["demeter", "hermes", "apollo"] as const;
 
@@ -49,7 +59,7 @@ const tools = {
 
   consult_god: tool({
     description:
-      "Ask a specific god a question. Returns the god's answer in their own voice. The endpoint follows the x402 payment-required pattern: without an authorised offering it returns a 402 with the canonical accepts envelope describing the required USDC tithe. With PANTHEON_CONSULT_SECRET set as bearer, the petitioner is authorised for the hackathon demo.",
+      "Ask a specific god a question. Returns the god's answer in their own voice. The endpoint follows the x402 payment-required pattern: the first request returns a 402 with a canonical accepts envelope describing the required CEP18 tithe; the petitioner then signs a TransferAuthorization with its own Casper key and retries with the X-Payment header. PANTHEON_CONSULT_SECRET as bearer is a hackathon fallback when CEP18 token funding hasn't been set up.",
     inputSchema: z.object({
       godId: z.enum(GOD_IDS),
       question: z
@@ -59,29 +69,93 @@ const tools = {
         .describe("The question to ask. One sentence works best."),
     }),
     execute: async ({ godId, question }) => {
+      const url = `${API_BASE}/api/consult/${godId}`;
+      const body = JSON.stringify({ question });
+
+      // 1. First attempt — empty when X402_ENABLED so we drive the real
+      //    x402 round-trip; bearer otherwise so the hackathon demo still
+      //    works when CEP18 token funding isn't yet in place.
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
-      if (CONSULT_SECRET) headers.Authorization = `Bearer ${CONSULT_SECRET}`;
+      if (!X402_ENABLED && CONSULT_SECRET) {
+        headers.Authorization = `Bearer ${CONSULT_SECRET}`;
+      }
 
-      const res = await fetch(`${API_BASE}/api/consult/${godId}`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ question }),
-      });
+      const res = await fetch(url, { method: "POST", headers, body });
+      if (res.status !== 402) {
+        if (!res.ok) {
+          throw new Error(`consult ${godId}: ${res.status} ${await res.text()}`);
+        }
+        return await res.json();
+      }
 
-      if (res.status === 402) {
-        const body = (await res.json()) as Record<string, unknown>;
+      // 2. Got a 402 — parse the accepts envelope.
+      const envelope = (await res.json()) as AcceptsEnvelope;
+      const requirement = envelope.accepts?.[0];
+      if (!requirement) {
         return {
           paymentRequired: true,
-          x402Envelope: body,
-          hint: "The temple demands an offering. Set PANTHEON_CONSULT_SECRET on the petitioner process to authorise.",
+          x402Envelope: envelope,
+          hint: "Server returned a 402 with no accepts entry — cannot pay.",
         };
       }
-      if (!res.ok) {
-        throw new Error(`consult ${godId}: ${res.status} ${await res.text()}`);
+
+      if (!X402_ENABLED) {
+        return {
+          paymentRequired: true,
+          x402Envelope: envelope,
+          hint: "The temple demands an offering. PETITIONER_X402=1 enables on-chain payment via @casper-ecosystem/casper-eip-712; PANTHEON_CONSULT_SECRET enables the hackathon-stage bearer fallback.",
+        };
       }
-      return await res.json();
+
+      // 3. Sign the TransferAuthorization with the petitioner's Casper key
+      //    and retry with the X-Payment header. The signature digest is the
+      //    EIP-712 typed-data hash over the auth fields under a domain that
+      //    pins the network + token. The Casper Facilitator's /verify and
+      //    /settle endpoints reconstruct the same digest server-side.
+      let xPayment: string;
+      let signedPayer: string;
+      try {
+        const signer = loadSigner("petitioner");
+        const signed = await signPaymentPayload({
+          signerKey: signer,
+          recipient: requirement.payTo,
+          amount: requirement.amount,
+          paymentRequirements: requirement,
+          resourceUrl: requirement.resource ?? url,
+        });
+        xPayment = signed.header;
+        signedPayer = signer.publicKey.accountHash().toHex();
+      } catch (e) {
+        return {
+          paymentRequired: true,
+          x402Envelope: envelope,
+          signingError: e instanceof Error ? e.message : String(e),
+        };
+      }
+
+      const retry = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Payment": xPayment,
+        },
+        body,
+      });
+      if (!retry.ok) {
+        const text = await retry.text();
+        return {
+          paymentRequired: true,
+          paid: false,
+          retryStatus: retry.status,
+          retryBody: text.slice(0, 600),
+          signedAs: signedPayer,
+          paidTo: requirement.payTo,
+        };
+      }
+      const result = await retry.json();
+      return { ...result, paid: true, signedAs: signedPayer };
     },
   }),
 };

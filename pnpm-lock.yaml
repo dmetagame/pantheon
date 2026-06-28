@@ -73,6 +73,9 @@ importers:
 
   packages/sdk:
     dependencies:
+      '@casper-ecosystem/casper-eip-712':
+        specifier: ^1.2.1
+        version: 1.2.1
       casper-js-sdk:
         specifier: ^5.0.12
         version: 5.0.12
@@ -173,6 +176,9 @@ packages:
   '@alloc/quick-lru@5.2.0':
     resolution: {integrity: sha512-UrcABB+4bUrFABwbluTIBErXwvbsU/V7TZWfmbgJfbkwiBuziS9gxdODUyuiecfdGQ85jglMW6juS3+z5TsKLw==}
     engines: {node: '>=10'}
+
+  '@casper-ecosystem/casper-eip-712@1.2.1':
+    resolution: {integrity: sha512-qhrpaISByIoOnbELH7hhLMVBinIP1vOc4Z+6ZI5aItcc1O3SrDXNu0fdKm5qRSLLb5p94JxaS+jGegiIAwiKDA==}
 
   '@casperlabs/ts-results@3.3.5':
     resolution: {integrity: sha512-ymSQqqb4mOSet592li02u1Gd28LoOFJUm6R3jkdNQ+nqsnbHvN+izBigtP4aYmNwh6gFyCwDgjYporEJgDT4eA==}
@@ -1476,6 +1482,11 @@ snapshots:
       json-schema: 0.4.0
 
   '@alloc/quick-lru@5.2.0': {}
+
+  '@casper-ecosystem/casper-eip-712@1.2.1':
+    dependencies:
+      '@noble/curves': 1.9.7
+      '@noble/hashes': 1.8.0
 
   '@casperlabs/ts-results@3.3.5':
     dependencies:

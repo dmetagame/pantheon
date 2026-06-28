@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { generateEd25519Key, keyInfoFromPem } from "@pantheon/sdk";
+import { generateKey, keyInfoFromPem } from "@pantheon/sdk";
 
 const KEYS_DIR = resolve(homedir(), ".pantheon-keys");
 const PEM_PATH = resolve(KEYS_DIR, "petitioner.pem");
@@ -32,7 +32,10 @@ function main(): void {
   if (existsSync(PEM_PATH)) {
     info = keyInfoFromPem(readFileSync(PEM_PATH, "utf8"));
   } else {
-    const k = generateEd25519Key();
+    // Secp256k1 because the x402 Facilitator's signature verifier
+    // (casper-eip-712) does ECDSA public-key recovery and only accepts
+    // secp256k1 signatures. Ed25519 keys cannot be verified through it.
+    const k = generateKey("Secp256k1");
     writeFileSync(PEM_PATH, k.pem, { mode: 0o600 });
     chmodSync(PEM_PATH, 0o600);
     info = { publicKeyHex: k.publicKeyHex, accountHash: k.accountHash };

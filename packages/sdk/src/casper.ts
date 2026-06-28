@@ -77,17 +77,30 @@ export interface GeneratedKey {
   accountHash: string;
 }
 
+export type CasperAlgo = "Ed25519" | "Secp256k1";
+
 /**
- * Generate a fresh Ed25519 keypair for a new god. Returned PEM is unencrypted
- * — caller is responsible for writing it to disk with secure permissions.
+ * Generate a fresh Casper keypair. Returned PEM is unencrypted — caller is
+ * responsible for writing it to disk with secure permissions.
+ *
+ * Use Ed25519 for general Casper operations (publish, settle, etc.).
+ * Use Secp256k1 for the petitioner because the x402 Facilitator's signature
+ * verifier (casper-eip-712) does ECDSA public-key recovery — Ed25519 signatures
+ * cannot be verified through it.
  */
-export function generateEd25519Key(): GeneratedKey {
-  const key = PrivateKey.generate(1);
+export function generateKey(algo: CasperAlgo = "Ed25519"): GeneratedKey {
+  const algoCode = algo === "Ed25519" ? 1 : 2;
+  const key = PrivateKey.generate(algoCode);
   return {
     pem: key.toPem(),
     publicKeyHex: key.publicKey.toHex(),
     accountHash: key.publicKey.accountHash().toHex(),
   };
+}
+
+/** Back-compat alias for callers that hard-code Ed25519. */
+export function generateEd25519Key(): GeneratedKey {
+  return generateKey("Ed25519");
 }
 
 /** Read public key + account hash from an existing PEM (Ed25519 or Secp256k1). */
