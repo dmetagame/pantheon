@@ -12,6 +12,42 @@ database.
 
 Built for the [Casper Agentic Buildathon 2026](https://dorahacks.io/hackathon/casper-agentic-buildathon/detail).
 
+## Live
+
+- **App:** **https://pantheon-silk-three.vercel.app**
+  - [`/`](https://pantheon-silk-three.vercel.app/) — pantheon scoreboard with live on-chain reputation
+  - [`/god/demeter`](https://pantheon-silk-three.vercel.app/god/demeter), [`/god/hermes`](https://pantheon-silk-three.vercel.app/god/hermes), [`/god/apollo`](https://pantheon-silk-three.vercel.app/god/apollo) — per-god profile, treasury, recent prophecies + Brier scores
+  - [`/ledger`](https://pantheon-silk-three.vercel.app/ledger) — chronological feed of every on-chain action (publishes, quorum proposals + approvals, settles, reputation updates, x402 consults, receipts, refunds) — each row links to cspr.live
+
+## Verify on cspr.live
+
+Every claim the UI makes is recomputable from the public chain. The
+deployed contracts (Casper Testnet, protocol 2.2.2):
+
+| Contract | Package hash | cspr.live |
+|---|---|---|
+| ProphecyRegistry | `d1d0e57c20d6fbf477928a68d7c0395273ad492b26aa87715fe125be2388e6dd` | [↗](https://testnet.cspr.live/contract-package/d1d0e57c20d6fbf477928a68d7c0395273ad492b26aa87715fe125be2388e6dd) |
+| Reputation | `7e07920bc99e415f89994a01534afa0a43172d727e2bacae9e864ef47310b1b2` | [↗](https://testnet.cspr.live/contract-package/7e07920bc99e415f89994a01534afa0a43172d727e2bacae9e864ef47310b1b2) |
+| PriestQuorum | `2ed7015d8995208ccb0d68ff14a7fd3ba2495a54855cd3f4d42e42ebae64706e` | [↗](https://testnet.cspr.live/contract-package/2ed7015d8995208ccb0d68ff14a7fd3ba2495a54855cd3f4d42e42ebae64706e) |
+
+To independently verify a consultation receipt without trusting our DB:
+
+```sh
+curl -X POST https://pantheon-silk-three.vercel.app/api/verify-receipt \
+  -H "content-type: application/json" \
+  -d '{
+        "godId": "demeter",
+        "question": "<exact question text>",
+        "answer":   "<exact answer text>",
+        "settleTxHash": "<the settle tx hash from /ledger>"
+      }'
+```
+
+The endpoint recomputes `keccak256(godId | question | answer | settle_tx_hash)`,
+derives the lower 6 bytes as a `transfer_id`, and finds the matching native
+transfer on cspr.cloud. Same logic is exposed as the
+`verify_consult_receipt` MCP tool.
+
 ## Why this is a primitive, not a chatbot
 
 Most on-chain "AI reputation" is hand-wavy off-chain Elo wrapped in a
@@ -74,7 +110,9 @@ pantheon/
 │   ├── scripts/              init-gods / init-priest / init-petitioner /
 │   │                         init-priesthood / register-gods /
 │   │                         backfill-reputation-tx / migrate
-│   └── vercel.json           Cron schedule (5 jobs)
+│   └── vercel.json           Daily prophecy crons (settle + sweep
+│                             run from .github/workflows/cron.yml on
+│                             Hobby-tier-safe schedules)
 └── docs/
     ├── ARCHITECTURE.md       (the deep technical brief)
     └── DEPLOY.md             (step-by-step setup)
@@ -179,14 +217,42 @@ the architecture brief, contract layout, and math.
   (`/api/scoreboard`, `/api/status`, `/api/consult/[god]`,
   `/api/verify-receipt`). Structured JSON log lines for Vercel log search.
 
-## What's on the v2 roadmap
+## Late-cycle additions
 
-- PriestQuorum redeploy with a typed `SettleProphecy` variant — blocked on
-  a Rust nightly / wasm-opt bulk-memory issue against the Casper interpreter.
-- Per-god distinct priests — currently one priest co-signs all three.
-- Programmatic CSPR → WCSPR wrap — currently the petitioner needs a manual
-  cspr.trade UI step to fund.
-- Open registration path for new gods — the three reference instances are
-  hardcoded today.
-- Live event tap from cspr.cloud SSE → `/ledger` updates without page
-  refresh.
+After the original tier work shipped, a polish batch landed:
+
+- **Typed `propose_settle` entry on PriestQuorum.** The `ProposalKind` enum
+  gained a `SettleProphecy { prophecy_id, truth, source_value }` variant
+  plus a convenience entry-point; cspr.live now shows self-documenting
+  settlement proposals instead of byte-packed `Custom { tag, payload }`
+  blobs. Unblocked by a focused Casper wasm-toolchain investigation
+  (`wasm32v1-none` target + a couple of `bulk-memory-opt` rustflags;
+  see [`contracts/priest_quorum/REDEPLOY_BLOCKER.md`](contracts/priest_quorum/REDEPLOY_BLOCKER.md)).
+- **Per-god distinct priests.** Each god now has its own priest keypair;
+  the quorum trail shows three independent signers instead of one shared
+  key co-signing for all three.
+- **Programmatic CSPR → WCSPR wrap.** `contracts/wrap_cspr` is a Casper
+  session WASM that creates a purse, transfers `amount` motes, and calls
+  `WCSPR.deposit` in one deploy — the petitioner no longer needs the
+  manual `testnet.cspr.trade` UI step. Casper-contract 5.1.1's redundant
+  `#[no_mangle]` panic handler was patched out with a local bump
+  allocator; the artifact validates as strict MVP wasm.
+- **Live event tap (cspr.cloud SSE).** `/ledger` and the home page hydrate
+  from a live SSE stream — new rows appear without a refresh.
+- **Open god registration — design.** Three-layer migration plan in
+  [`docs/OPEN_REGISTRATION.md`](docs/OPEN_REGISTRATION.md) to replace the
+  hardcoded three-god union with a DB-backed registry. Source change is
+  ~7h focused work; deferred to v2.
+
+## Operating it for free
+
+The live site runs entirely on free tiers:
+
+- **Vercel Hobby** hosts the Next.js app (no Pro plan).
+- **GitHub Actions cron** runs the 15-min settle + 30-min sweep loops —
+  Vercel Hobby caps schedules at one fire per day, so the high-cadence
+  crons live in [`.github/workflows/cron.yml`](.github/workflows/cron.yml)
+  and just curl the existing `/api/cron/*` endpoints with the same
+  `CRON_SECRET` Bearer auth.
+- **Neon Postgres** free tier holds the DB.
+- **Casper Testnet** for chain ops.
