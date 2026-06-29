@@ -1,0 +1,65 @@
+name: cron
+
+# Vercel Hobby caps scheduled jobs at one fire per day, so the high-cadence
+# Pantheon crons run from GitHub Actions instead and just curl the Vercel
+# endpoints with the Bearer secret the route handlers already check for.
+# Daily prophecy crons stay on Vercel — they only fire once per day so the
+# Hobby limit isn't a blocker for them.
+#
+# GitHub's scheduler is best-effort; expect occasional 5–15 min skew under
+# load. That's well within the operational tolerance of the settle/sweep
+# pipeline.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # settle
+    - cron: "*/30 * * * *"   # sweep
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Which endpoint to ping (settle / sweep / both)"
+        required: true
+        default: "both"
+        type: choice
+        options: [settle, sweep, both]
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: ping /api/cron/settle
+        if: >-
+          github.event.schedule == '*/15 * * * *' ||
+          (github.event_name == 'workflow_dispatch' &&
+           (inputs.target == 'settle' || inputs.target == 'both'))
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: https://pantheon-silk-three.vercel.app
+        run: |
+          curl -fsS \
+            --max-time 60 \
+            --retry 2 --retry-delay 5 \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${APP_URL}/api/cron/settle" \
+            -o /tmp/out.json -w "HTTP %{http_code} in %{time_total}s\n"
+          head -c 2000 /tmp/out.json
+          echo
+
+      - name: ping /api/cron/sweep
+        if: >-
+          github.event.schedule == '*/30 * * * *' ||
+          (github.event_name == 'workflow_dispatch' &&
+           (inputs.target == 'sweep' || inputs.target == 'both'))
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: https://pantheon-silk-three.vercel.app
+        run: |
+          curl -fsS \
+            --max-time 60 \
+            --retry 2 --retry-delay 5 \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${APP_URL}/api/cron/sweep" \
+            -o /tmp/out.json -w "HTTP %{http_code} in %{time_total}s\n"
+          head -c 2000 /tmp/out.json
+          echo
