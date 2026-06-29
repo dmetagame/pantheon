@@ -1,8 +1,3 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "crons": [
-    { "path": "/api/cron/prophesy/demeter", "schedule": "0 9 * * *" },
-    { "path": "/api/cron/prophesy/hermes", "schedule": "5 9 * * *" },
-    { "path": "/api/cron/prophesy/apollo", "schedule": "10 9 * * *" }
-  ]
+  "$schema": "https://openapi.vercel.sh/vercel.json"
 }

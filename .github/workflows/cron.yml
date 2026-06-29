@@ -1,65 +1,86 @@
 name: cron
 
-# Vercel Hobby caps scheduled jobs at one fire per day, so the high-cadence
-# Pantheon crons run from GitHub Actions instead and just curl the Vercel
-# endpoints with the Bearer secret the route handlers already check for.
-# Daily prophecy crons stay on Vercel — they only fire once per day so the
-# Hobby limit isn't a blocker for them.
+# All Pantheon scheduled work runs from GitHub Actions and just curls the
+# Vercel endpoints with the Bearer secret the route handlers already check
+# for. Vercel Hobby was originally hosting the 3 daily prophesy crons, but
+# it silently skipped 2 of 3 on the same day during the prod audit — the
+# Hobby tier appears to cap the number of cron jobs per project, not just
+# the cadence. Move them all here so scheduling is uniform and reliable.
 #
 # GitHub's scheduler is best-effort; expect occasional 5–15 min skew under
-# load. That's well within the operational tolerance of the settle/sweep
-# pipeline.
+# load. That's well within the operational tolerance of every pipeline
+# here. settle + sweep are idempotent so a missed/extra fire is harmless;
+# prophesy is idempotent at the LLM-publish level (one tx per scheduled
+# fire either way).
 
 on:
   schedule:
+    # Daily prophesy crons. Stagger by 5 min so each god finishes its LLM
+    # call + publish before the next starts (≈17s typical, but generous).
+    - cron: "0 9 * * *"      # prophesy/demeter
+    - cron: "5 9 * * *"      # prophesy/hermes
+    - cron: "10 9 * * *"     # prophesy/apollo
+    # High-cadence ops crons.
     - cron: "*/15 * * * *"   # settle
     - cron: "*/30 * * * *"   # sweep
   workflow_dispatch:
     inputs:
       target:
-        description: "Which endpoint to ping (settle / sweep / both)"
+        description: "Which endpoint to ping"
         required: true
-        default: "both"
+        default: "all"
         type: choice
-        options: [settle, sweep, both]
+        options: [demeter, hermes, apollo, settle, sweep, all-prophesy, all-ops, all]
+
+env:
+  APP_URL: https://pantheon-silk-three.vercel.app
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: ping /api/cron/settle
+      - name: prophesy/demeter
+        if: >-
+          github.event.schedule == '0 9 * * *' ||
+          (github.event_name == 'workflow_dispatch' &&
+           contains(fromJSON('["demeter","all-prophesy","all"]'), inputs.target))
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: ./.github/scripts/ping-cron.sh /api/cron/prophesy/demeter
+
+      - name: prophesy/hermes
+        if: >-
+          github.event.schedule == '5 9 * * *' ||
+          (github.event_name == 'workflow_dispatch' &&
+           contains(fromJSON('["hermes","all-prophesy","all"]'), inputs.target))
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: ./.github/scripts/ping-cron.sh /api/cron/prophesy/hermes
+
+      - name: prophesy/apollo
+        if: >-
+          github.event.schedule == '10 9 * * *' ||
+          (github.event_name == 'workflow_dispatch' &&
+           contains(fromJSON('["apollo","all-prophesy","all"]'), inputs.target))
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: ./.github/scripts/ping-cron.sh /api/cron/prophesy/apollo
+
+      - name: settle
         if: >-
           github.event.schedule == '*/15 * * * *' ||
           (github.event_name == 'workflow_dispatch' &&
-           (inputs.target == 'settle' || inputs.target == 'both'))
+           contains(fromJSON('["settle","all-ops","all"]'), inputs.target))
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          APP_URL: https://pantheon-silk-three.vercel.app
-        run: |
-          curl -fsS \
-            --max-time 60 \
-            --retry 2 --retry-delay 5 \
-            -H "Authorization: Bearer ${CRON_SECRET}" \
-            "${APP_URL}/api/cron/settle" \
-            -o /tmp/out.json -w "HTTP %{http_code} in %{time_total}s\n"
-          head -c 2000 /tmp/out.json
-          echo
+        run: ./.github/scripts/ping-cron.sh /api/cron/settle
 
-      - name: ping /api/cron/sweep
+      - name: sweep
         if: >-
           github.event.schedule == '*/30 * * * *' ||
           (github.event_name == 'workflow_dispatch' &&
-           (inputs.target == 'sweep' || inputs.target == 'both'))
+           contains(fromJSON('["sweep","all-ops","all"]'), inputs.target))
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          APP_URL: https://pantheon-silk-three.vercel.app
-        run: |
-          curl -fsS \
-            --max-time 60 \
-            --retry 2 --retry-delay 5 \
-            -H "Authorization: Bearer ${CRON_SECRET}" \
-            "${APP_URL}/api/cron/sweep" \
-            -o /tmp/out.json -w "HTTP %{http_code} in %{time_total}s\n"
-          head -c 2000 /tmp/out.json
-          echo
+        run: ./.github/scripts/ping-cron.sh /api/cron/sweep
