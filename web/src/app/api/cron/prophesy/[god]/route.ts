@@ -86,6 +86,7 @@ export async function GET(
 
 function isAuthorized(req: Request): boolean {
   const auth = req.headers.get("authorization");
-  return auth === `Bearer ${process.env.CRON_SECRET ?? ""}`;
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+  return auth === `Bearer ${secret}`;
 }
-

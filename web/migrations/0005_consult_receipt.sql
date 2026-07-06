@@ -1,5 +1,5 @@
--- On-chain receipt for each consultation. The petitioner signs a tiny
--- self-transfer whose transfer-id is the lower 8 bytes of
+-- On-chain receipt for each consultation. The configured receipt signer sends
+-- a tiny transfer whose transfer-id is the lower 6 bytes of
 -- keccak256(godId || question || answer || settle_tx_hash).
 --
 -- Anyone with (question, answer, settleTx) can recompute the hash and find

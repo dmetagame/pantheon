@@ -180,11 +180,11 @@ export async function POST(
   }
 
   // ─── 5. on-chain receipt ───────────────────────────────────────────────
-  // The petitioner signs a tiny self-transfer whose transfer_id is the lower
-  // 8 bytes of keccak256(godId | question | answer | settle_tx_hash). Anyone
-  // who knows those four can recompute the hash and find the matching
-  // transfer on cspr.live — no database trust required. We only attempt this
-  // when there's a real settle tx to bind to; the bearer-demo path skips it.
+  // The configured receipt signer issues a tiny native transfer whose
+  // transfer_id is the lower 6 bytes of keccak256(godId | question | answer |
+  // settle_tx_hash). Anyone who knows those four can recompute the hash and
+  // find the matching transfer on cspr.live. We only attempt this when there's
+  // a real settle tx to bind to; the bearer-demo path skips it.
   let receipt: ConsultReceipt | null = null;
   if (paidViaX402?.settleTx) {
     try {

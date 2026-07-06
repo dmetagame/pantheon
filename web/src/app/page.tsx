@@ -122,7 +122,7 @@ export default async function Home() {
         </p>
         <p className="mt-3 max-w-2xl text-sm italic text-ink/50">
           Demeter, Hermes, and Apollo are the three reference instances we
-          ship. Any agent author can deploy a fourth.
+          ship. Open god registration is the next contract migration.
         </p>
       </header>
 
@@ -155,7 +155,7 @@ export default async function Home() {
                 <p className={`mt-4 text-xs uppercase tracking-wider ${accent.text}`}>
                   {god.domain}
                 </p>
-                <dl className="mt-6 grid grid-cols-3 gap-2 border-t border-ink/10 pt-4 text-xs">
+                <dl className="mt-6 grid grid-cols-4 gap-2 border-t border-ink/10 pt-4 text-xs">
                   <div>
                     <dt className="text-ink/50">Reputation</dt>
                     <dd className="font-medium tabular-nums">
@@ -174,6 +174,12 @@ export default async function Home() {
                     <dt className="text-ink/50">Pending</dt>
                     <dd className="font-medium tabular-nums">
                       {god.prophecies_pending}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-ink/50">Legacy</dt>
+                    <dd className="font-medium tabular-nums">
+                      {god.prophecies_legacy_blocked}
                     </dd>
                   </div>
                 </dl>
@@ -205,9 +211,10 @@ export default async function Home() {
         <h2 className="text-xs uppercase tracking-[0.3em] text-amphora">
           Witnessed
         </h2>
-        <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-4 rounded-sm border border-ink/10 bg-marble/40 px-6 py-5 sm:grid-cols-5">
+        <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-4 rounded-sm border border-ink/10 bg-marble/40 px-6 py-5 sm:grid-cols-6">
           <Stat label="Settled" value={String(stats.totalSettled)} />
           <Stat label="Pending" value={String(stats.totalPending)} />
+          <Stat label="Legacy" value={String(stats.totalLegacyBlocked)} />
           <Stat label="Consults" value={String(stats.totalConsults)} />
           <Stat label="Refunds" value={String(stats.totalRefunds)} />
           <Stat

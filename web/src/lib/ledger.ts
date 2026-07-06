@@ -10,6 +10,8 @@
 import sql from "./db";
 import type { GodId } from "@pantheon/agents";
 
+const CASPER_DEPLOY_HASH_RE = "^[0-9a-fA-F]{64}$";
+
 export type LedgerKind =
   | "publish"
   | "propose"
@@ -71,7 +73,6 @@ export async function getLedger(limit = 100): Promise<LedgerEntry[]> {
              id, NULL::bigint
       FROM prophecies
       WHERE reputation_tx_hash IS NOT NULL
-        AND reputation_tx_hash != 'backfilled-pre-tier-0-review'
 
       UNION ALL
       SELECT created_at AS ts, god_id, 'consult-settle'::text,
@@ -94,6 +95,7 @@ export async function getLedger(limit = 100): Promise<LedgerEntry[]> {
              refund_prophecy_id::int, id
       FROM consultations WHERE refund_tx_hash IS NOT NULL
     ) AS u
+    WHERE tx_hash ~ ${CASPER_DEPLOY_HASH_RE}
     ORDER BY ts DESC
     LIMIT ${limit};
   `) as unknown as LedgerEntry[];

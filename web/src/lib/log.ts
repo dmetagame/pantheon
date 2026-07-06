@@ -19,12 +19,10 @@ function emit(level: Level, msg: string, fields?: LogFields): void {
   if (process.env.PANTHEON_PRETTY_LOGS) {
     const tag = level.toUpperCase().padEnd(5);
     const extra = fields ? " " + JSON.stringify(fields) : "";
-    // eslint-disable-next-line no-console
     console.log(`[${tag}] ${msg}${extra}`);
     return;
   }
   // JSON line — Vercel log search treats this as a structured event.
-  // eslint-disable-next-line no-console
   console.log(JSON.stringify(record));
 }
 

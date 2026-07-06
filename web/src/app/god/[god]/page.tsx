@@ -47,6 +47,7 @@ function fmtRelative(d: Date): string {
 
 const EXPLORER = "https://cspr.live/deploy";
 const ACCOUNT_EXPLORER = "https://testnet.cspr.live/account";
+const CASPER_DEPLOY_HASH_RE = /^[0-9a-fA-F]{64}$/;
 const TOKEN_SYMBOL = process.env.X402_TOKEN_SYMBOL ?? "WCSPR";
 const TOKEN_DECIMALS = parseInt(process.env.X402_TOKEN_DECIMALS ?? "9", 10);
 
@@ -78,8 +79,8 @@ function TreasuryStrip({
   accentText: string;
 }) {
   if (!stats.publicKey) return null;
-  const matches =
-    Math.abs(stats.reputationBp - stats.dbReputationBp) <= 5; // ±0.05% slack for rounding
+  const chainUnavailable = stats.chainReputationBp === null;
+  const matches = stats.reputationVerified;
   return (
     <div className="mt-6 flex flex-wrap items-baseline justify-between gap-3 rounded-sm border border-ink/10 bg-marble/50 px-4 py-3 text-xs">
       <div>
@@ -108,12 +109,18 @@ function TreasuryStrip({
         <p
           className={`mt-1 text-base font-medium tabular-nums ${matches ? "text-laurel" : "text-amphora"}`}
           title={
-            matches
+            chainUnavailable
+              ? "Chain reputation read is temporarily unavailable; displaying DB EWMA fallback until the node responds."
+              : matches
               ? "Off-chain EWMA equals on-chain reputation_bp(godId) — independent computations agree."
-              : `Off-chain EWMA = ${(stats.dbReputationBp / 100).toFixed(2)}% vs on-chain ${(stats.reputationBp / 100).toFixed(2)}% — operational state and contract state disagree.`
+              : `Off-chain EWMA = ${(stats.dbReputationBp / 100).toFixed(2)}% vs on-chain ${((stats.chainReputationBp ?? 0) / 100).toFixed(2)}% — operational state and contract state disagree.`
           }
         >
-          {matches ? "✓ match" : `Δ ${((stats.dbReputationBp - stats.reputationBp) / 100).toFixed(2)}%`}
+          {chainUnavailable
+            ? "chain pending"
+            : matches
+              ? "✓ match"
+              : `Δ ${((stats.dbReputationBp - (stats.chainReputationBp ?? 0)) / 100).toFixed(2)}%`}
         </p>
       </div>
       <a
@@ -131,14 +138,16 @@ function TreasuryStrip({
 function ProphecyCard({ p }: { p: ProphecyRow }) {
   const status = prophecyStatus(p);
   const settled = !!p.settled_at;
+  const legacy = status.tone === "legacy";
   return (
     <article className="rounded-sm border border-ink/15 bg-marble/70 p-5">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="text-xs uppercase tracking-wider text-laurel">
-          {p.settlement_feed ?? "—"}{" "}
+          {p.settlement_feed ?? "Legacy"}{" "}
           <span className="text-ink/40">
-            {p.settlement_comparator ?? ""}{" "}
-            {fmtThreshold(p.settlement_feed, p.settlement_threshold)}
+            {legacy
+              ? "no settlement spec"
+              : `${p.settlement_comparator ?? ""} ${fmtThreshold(p.settlement_feed, p.settlement_threshold)}`}
           </span>
         </p>
         <StatusPill tone={status.tone} label={status.label} />
@@ -169,7 +178,7 @@ function ProphecyCard({ p }: { p: ProphecyRow }) {
           value={fmtRelative(p.published_at)}
         />
         <Field
-          label={settled ? "Settled" : "Settles"}
+          label={settled ? "Settled" : legacy ? "Expired" : "Settles"}
           value={fmtRelative(settled ? p.settled_at! : p.settles_at)}
         />
       </dl>
@@ -284,6 +293,7 @@ function ConsultationCard({ c }: { c: ConsultationRow }) {
 }
 
 function TxLink({ label, hash }: { label: string; hash: string }) {
+  if (!CASPER_DEPLOY_HASH_RE.test(hash)) return null;
   return (
     <a
       href={`${EXPLORER}/${hash}`}
@@ -321,7 +331,7 @@ function StatusPill({
   tone,
   label,
 }: {
-  tone: "pending" | "fulfilled" | "broken" | "unconfirmed";
+  tone: "pending" | "fulfilled" | "broken" | "unconfirmed" | "legacy";
   label: string;
 }) {
   const styles: Record<typeof tone, string> = {
@@ -329,6 +339,7 @@ function StatusPill({
     broken: "border-amphora/50 text-amphora bg-amphora/5",
     pending: "border-ink/20 text-ink/60 bg-ink/[0.02]",
     unconfirmed: "border-ink/15 text-ink/40 bg-ink/[0.02]",
+    legacy: "border-ink/15 text-ink/40 bg-ink/[0.02]",
   };
   return (
     <span
@@ -384,7 +395,7 @@ export default async function GodPage({
         <p className="mt-4 max-w-2xl text-ink/70">{meta.domain}</p>
         <p className="mt-2 max-w-2xl text-sm italic text-ink/50">{voice}</p>
 
-        <dl className="mt-8 grid grid-cols-2 gap-6 border-t border-ink/10 pt-6 sm:grid-cols-4">
+        <dl className="mt-8 grid grid-cols-2 gap-6 border-t border-ink/10 pt-6 sm:grid-cols-5">
           <Field
             label="Reputation"
             value={
@@ -402,6 +413,11 @@ export default async function GodPage({
           <Field
             label="Pending"
             value={stats.prophecies_pending.toString()}
+            mono
+          />
+          <Field
+            label="Legacy"
+            value={stats.prophecies_legacy_blocked.toString()}
             mono
           />
           <Field
@@ -440,8 +456,7 @@ export default async function GodPage({
           </h2>
           <p className="mt-2 text-xs text-ink/50">
             Petitioners&apos; questions answered, each bound to an on-chain
-            receipt — petitioner-signed proof that this answer was given for
-            this payment.
+            receipt from the configured receipt signer for this payment.
           </p>
           <ul className="mt-6 grid gap-4">
             {consultations.map((c) => (
@@ -454,8 +469,8 @@ export default async function GodPage({
       )}
 
       <footer className="mt-24 border-t border-ink/10 pt-6 text-xs text-ink/50">
-        On-chain links resolve to cspr.live. Reputation = 100 − mean Brier across
-        settled prophecies.
+        On-chain links resolve to cspr.live. Reputation = 100 − EWMA Brier
+        across settled prophecies.
       </footer>
     </main>
   );

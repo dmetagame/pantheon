@@ -12,11 +12,13 @@
 // network="casper:casper-test". See:
 //   https://docs.cspr.cloud/x402-facilitator-api/
 
-import * as eip712Ns from "@casper-ecosystem/casper-eip-712";
+import {
+  CASPER_DOMAIN_TYPES,
+  buildDomain,
+  hashTypedData,
+} from "@casper-ecosystem/casper-eip-712";
 import * as casperSdkNs from "casper-js-sdk";
 
-const eip712 =
-  (eip712Ns as unknown as { default?: typeof eip712Ns }).default ?? eip712Ns;
 const casperSdk =
   (casperSdkNs as unknown as { default?: typeof casperSdkNs }).default ??
   casperSdkNs;
@@ -266,7 +268,7 @@ export async function signPaymentPayload(opts: BuildAndSignOpts): Promise<{
     nonce: `0x${nonceHex}`,
   };
 
-  const domain = eip712.buildDomain(
+  const domain = buildDomain(
     opts.paymentRequirements.extra.name,
     opts.paymentRequirements.extra.version,
     cfg.network,
@@ -278,12 +280,12 @@ export async function signPaymentPayload(opts: BuildAndSignOpts): Promise<{
   //     `TransferAuthorization` in @casper-ecosystem/casper-eip-712.
   // (2) Pass CASPER_DOMAIN_TYPES so the domain separator is built from
   //     chain_name + contract_package_hash, not the EVM default.
-  const digestBytes = eip712.hashTypedData(
+  const digestBytes = hashTypedData(
     domain,
     TRANSFER_WITH_AUTHORIZATION_TYPES,
     "TransferWithAuthorization",
     message,
-    { domainTypes: eip712.CASPER_DOMAIN_TYPES },
+    { domainTypes: CASPER_DOMAIN_TYPES },
   ) as Uint8Array;
 
   // The Casper Facilitator verifies with native casper-js-sdk signing — same

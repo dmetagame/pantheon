@@ -15,8 +15,14 @@ export interface GodStats {
    *  purely as a sanity check against the chain value. Equal in normal
    *  operation; divergent rows are flagged in the UI. */
   dbReputationBp: number;
+  /** Null when the chain/indexer read failed. */
+  chainReputationBp: number | null;
+  reputationVerified: boolean;
   prophecies_settled: number;
+  /** Published rows the settlement cron can still resolve from stored specs. */
   prophecies_pending: number;
+  /** Older on-chain rows published before deterministic settlement specs existed. */
+  prophecies_legacy_blocked: number;
   last_prophecy_at: Date | null;
   /** Casper public key (with algorithm prefix). */
   publicKey: string | null;
@@ -48,6 +54,7 @@ interface Row {
   god_id: GodStats["id"];
   prophecies_settled: number;
   prophecies_pending: number;
+  prophecies_legacy_blocked: number;
   last_prophecy_at: Date | null;
   brier_history: number[] | null;
 }
@@ -75,7 +82,8 @@ function foldEwma(samples: number[]): number {
  * petitioner pays scales with the same number cspr.live shows for the god.
  */
 export async function getReputationBp(id: GodStats["id"]): Promise<number> {
-  return (await fetchChainReputation(id)).reputationBp;
+  const chain = await fetchChainReputation(id);
+  return chain?.reputationBp ?? (await getDbReputationBp(id));
 }
 
 function godPublicKey(id: GodStats["id"]): string | null {
@@ -102,10 +110,10 @@ interface ChainRep {
   prophecies_settled: number;
 }
 
-async function fetchChainReputation(id: GodStats["id"]): Promise<ChainRep> {
+async function fetchChainReputation(id: GodStats["id"]): Promise<ChainRep | null> {
   try {
     const r = await readReputationFromChain(id);
-    if (!r) return { reputationBp: 0, prophecies_settled: 0 };
+    if (!r) return null;
     return {
       reputationBp: 10_000 - r.accuracyBp,
       prophecies_settled: r.prophecies_settled,
@@ -115,28 +123,66 @@ async function fetchChainReputation(id: GodStats["id"]): Promise<ChainRep> {
       godId: id,
       error: e instanceof Error ? e.message : String(e),
     });
-    return { reputationBp: 0, prophecies_settled: 0 };
+    return null;
   }
 }
 
+async function getDbReputationBp(id: GodStats["id"]): Promise<number> {
+  const [row] = (await sql`
+    SELECT ARRAY_AGG(brier_bp ORDER BY settled_at)
+      FILTER (
+        WHERE settled_at IS NOT NULL
+          AND brier_bp IS NOT NULL
+          AND (reputation_tx_hash IS NOT NULL OR reputation_backfilled)
+      ) AS brier_history
+    FROM prophecies
+    WHERE god_id = ${id};
+  `) as unknown as Array<{ brier_history: number[] | null }>;
+  const history = row?.brier_history ?? [];
+  return history.length > 0 ? 10_000 - foldEwma(history) : 0;
+}
+
 export async function getScoreboard(): Promise<GodStats[]> {
-  // Pending count excludes orphans (no on_chain_id) — those can't reach settle
-  // until the sweeper backfills them, and inflating the live pending tally
-  // misleads viewers.
+  // Pending count excludes orphans (no on_chain_id) and legacy rows that were
+  // published before deterministic settlement specs were stored. Those legacy
+  // rows are real on-chain publishes, but the cron cannot honestly resolve
+  // them from current DB facts, so they are reported separately.
   //
   // brier_history is ordered by settled_at and filtered to rows that actually
-  // had record_outcome land on chain (reputation_tx_hash NOT NULL). Early
-  // test settlements that never propagated to the Reputation contract would
-  // otherwise inflate the DB EWMA vs. what the chain holds. With this filter
-  // the DB fold and the on-chain reputation_bp(godId) agree exactly.
+  // had the reputation outcome land on chain (either we have the tx hash, or
+  // a legacy backfill matched the chain EWMA). Early test settlements that
+  // never propagated to the Reputation contract would otherwise inflate the
+  // DB EWMA vs. what the chain holds.
   const rows = (await sql`
     SELECT
       god_id,
-      COUNT(*) FILTER (WHERE settled_at IS NOT NULL AND reputation_tx_hash IS NOT NULL)::int AS prophecies_settled,
-      COUNT(*) FILTER (WHERE settled_at IS NULL AND on_chain_id IS NOT NULL)::int AS prophecies_pending,
+      COUNT(*) FILTER (
+        WHERE settled_at IS NOT NULL
+          AND (reputation_tx_hash IS NOT NULL OR reputation_backfilled)
+      )::int AS prophecies_settled,
+      COUNT(*) FILTER (
+        WHERE settled_at IS NULL
+          AND on_chain_id IS NOT NULL
+          AND settlement_feed IS NOT NULL
+          AND settlement_comparator IS NOT NULL
+          AND settlement_threshold IS NOT NULL
+      )::int AS prophecies_pending,
+      COUNT(*) FILTER (
+        WHERE settled_at IS NULL
+          AND on_chain_id IS NOT NULL
+          AND (
+            settlement_feed IS NULL
+            OR settlement_comparator IS NULL
+            OR settlement_threshold IS NULL
+          )
+      )::int AS prophecies_legacy_blocked,
       MAX(published_at) AS last_prophecy_at,
       ARRAY_AGG(brier_bp ORDER BY settled_at)
-        FILTER (WHERE settled_at IS NOT NULL AND brier_bp IS NOT NULL AND reputation_tx_hash IS NOT NULL) AS brier_history
+        FILTER (
+          WHERE settled_at IS NOT NULL
+            AND brier_bp IS NOT NULL
+            AND (reputation_tx_hash IS NOT NULL OR reputation_backfilled)
+        ) AS brier_history
     FROM prophecies
     GROUP BY god_id;
   `) as unknown as Row[];
@@ -156,12 +202,14 @@ export async function getScoreboard(): Promise<GodStats[]> {
     const dbReputationBp =
       r && r.prophecies_settled > 0 ? 10_000 - ewmaBrier : 0;
     const chain = chainReps[i];
-    // Chain is the canonical source for pricing + display. The DB EWMA is
-    // tracked separately so the UI can show "off-chain agrees" or flag a
-    // divergence when ops state and chain state drift.
-    const reputationBp = chain.reputationBp;
+    // Chain is canonical when available. If the node/indexer read fails, fall
+    // back to the DB EWMA so pricing does not collapse to zero during provider
+    // incidents; reputationVerified remains false so the UI still flags it.
+    const reputationBp = chain?.reputationBp ?? dbReputationBp;
+    const reputationVerified =
+      chain !== null && Math.abs(chain.reputationBp - dbReputationBp) <= 5;
     const prophecies_settled = Math.max(
-      chain.prophecies_settled,
+      chain?.prophecies_settled ?? 0,
       r?.prophecies_settled ?? 0,
     );
     return {
@@ -169,8 +217,11 @@ export async function getScoreboard(): Promise<GodStats[]> {
       ...GOD_META[id],
       reputationBp,
       dbReputationBp,
+      chainReputationBp: chain?.reputationBp ?? null,
+      reputationVerified,
       prophecies_settled,
       prophecies_pending: r?.prophecies_pending ?? 0,
+      prophecies_legacy_blocked: r?.prophecies_legacy_blocked ?? 0,
       last_prophecy_at: r?.last_prophecy_at ?? null,
       publicKey: godPublicKey(id),
       treasuryMotes: treasuries[i].toString(),

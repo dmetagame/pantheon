@@ -119,11 +119,11 @@ After deploy the CLI prints each package hash. Paste them into
   (latest contract version hash, not the package hash)
 - `PRIEST_QUORUM_HASH`
 
-> ⚠️ The PriestQuorum contract exposes a typed `propose_settle(god_id,
-> prophecy_id, truth, source_value)` entry point (with the matching
-> `ProposalKind::SettleProphecy` variant) — `packages/sdk` calls that
-> entry, not the generic `propose` with a Custom-variant payload.
-> Redeployment is required after pulling source changes.
+> ⚠️ The source tree includes a typed `propose_settle(god_id, prophecy_id,
+> truth, source_value)` entry point, but the SDK defaults to the live-compatible
+> generic `propose` path with a `Custom { tag: "SettleProphecy", payload }`
+> variant. Set `PRIEST_QUORUM_PROPOSE_MODE=typed` only after deploying a
+> PriestQuorum package that exposes `propose_settle`.
 
 > ⚠️ **Casper Testnet `gas_price_tolerance` patch.** As of 2026-06-28
 > the testnet rejects transactions whose `gas_price_tolerance` exceeds
@@ -174,9 +174,9 @@ PETITIONER_X402=1 pnpm petition "Will USDC stay above 0.999 next hour?"
 ## 9. Deploy to Vercel
 
 ```sh
-cd web
-vercel link
-vercel env pull           # syncs env from Vercel UI
+# From the repository root, not web/.
+vercel link               # link the monorepo root to the pantheon project
+vercel env pull           # syncs env from Vercel UI if needed
 vercel deploy --prod
 ```
 
@@ -184,14 +184,19 @@ Set the env vars in the Vercel UI. **Use the _PEM_ env var paths in
 production** (Vercel's filesystem is read-only):
 
 - `CASPER_ADMIN_SECRET_KEY_PEM` (paste full PEM, escape newlines as `\n`)
-- `CASPER_PRIEST_SECRET_KEY_PEM`
+- `CASPER_PRIEST_DEMETER_SECRET_KEY_PEM`
+- `CASPER_PRIEST_HERMES_SECRET_KEY_PEM`
+- `CASPER_PRIEST_APOLLO_SECRET_KEY_PEM`
+- `CASPER_PRIEST_SECRET_KEY_PEM` (legacy shared-priest fallback)
 - `CASPER_GOD_DEMETER_SECRET_KEY_PEM`
 - `CASPER_GOD_HERMES_SECRET_KEY_PEM`
 - `CASPER_GOD_APOLLO_SECRET_KEY_PEM`
 - `CASPER_PETITIONER_SECRET_KEY_PEM`
 
-Vercel reads `vercel.json` and provisions the five cron jobs. Each cron call
-arrives with `Authorization: Bearer $CRON_SECRET`.
+Deploy from the repository root, not from `web/`, so Vercel sees the pnpm
+workspace and reuses the existing `pantheon` project. Scheduled jobs run from
+`.github/workflows/cron.yml` and call the deployed API with
+`Authorization: Bearer $CRON_SECRET`.
 
 ## Funding the petitioner
 

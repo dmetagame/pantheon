@@ -45,19 +45,17 @@ wasm-validate \
 
 ## Status
 
-Resolved. The current source has the typed `ProposalKind::SettleProphecy
-{ prophecy_id, truth, source_value }` variant + a `propose_settle`
-convenience entry-point. The off-chain SDK (`packages/sdk`) calls
-`propose_settle` directly with strongly-typed runtime args instead of
-the previous byte-packed `Custom { tag: "SettleProphecy", payload }`
-shape — cspr.live now shows a self-documenting `propose_settle`
-invocation rather than a blob of bytesrepr.
+Resolved at the toolchain level. The current source has the typed
+`ProposalKind::SettleProphecy { prophecy_id, truth, source_value }` variant
++ a `propose_settle` convenience entry-point.
 
-Redeploy the contract after pulling these changes; the deployed
-package at
-`cef55e4a11859d46562160105e2a04924feb8357951ed64abcc1cf553b31922f`
-predates `propose_settle` and will reject the SDK's calls until a new
-version is added.
+Production still defaults to the generic `Custom { tag: "SettleProphecy",
+payload }` path because it is compatible with the deployed package and with
+future typed contracts. The off-chain SDK calls `propose_settle` only when
+`PRIEST_QUORUM_PROPOSE_MODE=typed` is set after a matching redeploy.
+
+The current production package is
+`2ed7015d8995208ccb0d68ff14a7fd3ba2495a54855cd3f4d42e42ebae64706e`.
 
 ## Prerequisites (one-time)
 

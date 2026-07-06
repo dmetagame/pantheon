@@ -15,7 +15,6 @@ const {
   ContractCallBuilder,
   HttpHandler,
   Key,
-  KeyTypeID,
   NativeTransferBuilder,
   PrivateKey,
   PublicKey,
@@ -29,13 +28,18 @@ type ContractCallBuilder = InstanceType<typeof casperSdk.ContractCallBuilder>;
 const CHAIN_NAME = process.env.CASPER_NETWORK ?? "casper-test";
 const NODE_URL =
   process.env.CASPER_NODE_URL ?? "https://node.testnet.cspr.cloud/rpc";
+const SUBMIT_NODE_URLS =
+  process.env.CASPER_SUBMIT_NODE_URLS ??
+  process.env.CASPER_SUBMIT_NODE_URL ??
+  NODE_URL;
+const POLL_NODE_URL = process.env.CASPER_POLL_NODE_URL ?? NODE_URL;
 const AUTH = process.env.CSPR_CLOUD_API_KEY ?? "";
 
-// "admin" signs administrative writes (settle, record_outcome,
+// "admin" signs administrative writes (settle, reputation outcome,
 // register_god). "priest" + per-god priests ("priest_demeter" etc.) co-sign
-// settlement quorum proposals. "petitioner" is the autonomous-agent customer
-// that pays x402 tithes to consult gods. Each god id signs its own publish +
-// future treasury actions.
+// settlement quorum proposals. "petitioner" is the configured receipt signer
+// for consult commitments. Each god id signs its own publish + future treasury
+// actions.
 export type SignerName =
   | "admin"
   | "priest"
@@ -49,6 +53,13 @@ export type SignerName =
 
 const signerCache = new Map<SignerName, PrivateKey>();
 let clientCache: RpcClient | null = null;
+let submitClientCache: SubmitTarget[] | null = null;
+let pollClientCache: RpcClient | null = null;
+
+interface SubmitTarget {
+  endpoint: string;
+  client: RpcClient;
+}
 
 function envForSigner(name: SignerName): { pemVar: string; pathVar: string } {
   if (name === "admin") {
@@ -151,13 +162,70 @@ export function loadSigner(name: SignerName): PrivateKey {
 
 export function loadClient(): RpcClient {
   if (clientCache) return clientCache;
-  const endpoint = NODE_URL.endsWith("/rpc")
-    ? NODE_URL
-    : `${NODE_URL.replace(/\/$/, "")}/rpc`;
+  const endpoint = formatRpcEndpoint(NODE_URL);
   const handler = new HttpHandler(endpoint);
-  if (AUTH) handler.setCustomHeaders({ Authorization: AUTH });
+  attachAuthHeader(handler, endpoint);
   clientCache = new RpcClient(handler);
   return clientCache;
+}
+
+function loadSubmitTargets(): SubmitTarget[] {
+  if (submitClientCache) return submitClientCache;
+  submitClientCache = parseRpcEndpointList(SUBMIT_NODE_URLS).map((url) => {
+    const endpoint = formatRpcEndpoint(url);
+    const handler = new HttpHandler(endpoint);
+    attachAuthHeader(handler, endpoint);
+    return { endpoint, client: new RpcClient(handler) };
+  });
+  return submitClientCache;
+}
+
+function loadPollClient(): RpcClient {
+  if (pollClientCache) return pollClientCache;
+  const handler = new HttpHandler(formatRpcEndpoint(POLL_NODE_URL));
+  attachAuthHeader(handler, POLL_NODE_URL);
+  pollClientCache = new RpcClient(handler);
+  return pollClientCache;
+}
+
+function formatRpcEndpoint(url: string): string {
+  return url.endsWith("/rpc") ? url : `${url.replace(/\/$/, "")}/rpc`;
+}
+
+function rpcEndpointFor(url: string): string {
+  return formatRpcEndpoint(url);
+}
+
+function parseRpcEndpointList(value: string): string[] {
+  const urls = value
+    .split(/[,\s]+/)
+    .map((v) => v.trim())
+    .filter(Boolean);
+  return Array.from(new Set(urls.length > 0 ? urls : [NODE_URL]));
+}
+
+function attachAuthHeader(handler: InstanceType<typeof HttpHandler>, url: string): void {
+  if (!AUTH || !shouldUseCSPRCloudAuth(url)) return;
+  handler.setCustomHeaders({ Authorization: AUTH });
+}
+
+function rpcHeadersFor(url: string): Record<string, string> {
+  const h: Record<string, string> = { "Content-Type": "application/json" };
+  if (AUTH && shouldUseCSPRCloudAuth(url)) h.Authorization = AUTH;
+  return h;
+}
+
+function shouldUseCSPRCloudAuth(url: string): boolean {
+  const host = hostnameOf(url);
+  return host === "cspr.cloud" || host.endsWith(".cspr.cloud");
+}
+
+function hostnameOf(url: string): string {
+  try {
+    return new URL(formatRpcEndpoint(url)).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
 }
 
 function mustHex(v: string | undefined, name: string): string {
@@ -182,7 +250,6 @@ async function send(
   gas: number,
 ): Promise<string> {
   const key = loadSigner(signerName);
-  const client = loadClient();
   const b = new ContractCallBuilder()
     .from(key.publicKey)
     .chainName(CHAIN_NAME)
@@ -195,32 +262,54 @@ async function send(
   // its signed body, so we already know what tx hash to look for even before
   // the node accepts it. If putTransaction's response is lost to a network
   // error, this is the hash we poll for to decide adopt-vs-retry.
+  return submitTransaction(tx, signerName);
+}
+
+async function submitTransaction(
+  tx: Parameters<RpcClient["putTransaction"]>[0] & { hash: { toHex(): string } },
+  signerName: SignerName,
+): Promise<string> {
   const expectedHash = tx.hash.toHex();
-  try {
-    const res = await client.putTransaction(tx);
-    return res.transactionHash.toHex();
-  } catch (err) {
-    if (!isLikelyNetworkError(err)) throw err;
-    // Lost the response — the tx may have landed anyway. Poll the node by
-    // the predetermined hash. If it ends up reverted, surface that as a
-    // distinct error so the cron can decide whether to retry or give up;
-    // we don't want to silently return a hash for a failed action.
-    const observed = await pollForTransaction(client, expectedHash, 90_000);
-    if (observed === "success") {
-      console.warn(
-        `[casper.send] adopted ${expectedHash} after network error: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-      return expectedHash;
+  const pollClient = loadPollClient();
+  const failures: string[] = [];
+
+  for (const target of loadSubmitTargets()) {
+    try {
+      const res = await target.client.putTransaction(tx);
+      return res.transactionHash.toHex();
+    } catch (err) {
+      const error = errorMessage(err);
+      if (isLikelyNetworkError(err)) {
+        // Lost the response — the tx may have landed anyway. Poll the node by
+        // the predetermined hash. If it ended up reverted, surface that as a
+        // distinct error so callers don't silently accept a failed action.
+        const observed = await pollForTransaction(
+          pollClient,
+          expectedHash,
+          90_000,
+        );
+        if (observed === "success") {
+          console.warn(
+            `[casper.send] adopted ${expectedHash} after network error from ${target.endpoint}: ${error}`,
+          );
+          return expectedHash;
+        }
+        if (observed === "reverted") {
+          throw new Error(
+            `Tx ${expectedHash} reverted on chain after a lost-response submission (signer=${signerName}, endpoint=${target.endpoint})`,
+          );
+        }
+      }
+      failures.push(`${target.endpoint}: ${error}`);
+      if (!isRetryableSubmitError(error) && !isLikelyNetworkError(err)) {
+        break;
+      }
     }
-    if (observed === "reverted") {
-      throw new Error(
-        `Tx ${expectedHash} reverted on chain after a lost-response submission (signer=${signerName})`,
-      );
-    }
-    throw err;
   }
+
+  throw new Error(
+    `all Casper submit endpoints failed for ${expectedHash} (signer=${signerName}): ${failures.join(" | ")}`,
+  );
 }
 
 function isLikelyNetworkError(err: unknown): boolean {
@@ -250,27 +339,94 @@ function isLikelyNetworkError(err: unknown): boolean {
   );
 }
 
+function isRetryableSubmitError(message: string): boolean {
+  return (
+    /\b(408|409|413|425|429|500|502|503|504)\b/.test(message) ||
+    /too many requests|rate limit|payload too large|timeout|temporarily unavailable|access lim/i.test(
+      message,
+    )
+  );
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 async function pollForTransaction(
-  client: RpcClient,
+  _client: RpcClient,
   txHash: string,
   timeoutMs: number,
 ): Promise<"success" | "reverted" | "not_found"> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    try {
-      const res = await client.getTransactionByTransactionHash(txHash);
-      const info = res?.executionInfo as
-        | { executionResult: { errorMessage?: string } }
-        | undefined;
-      if (info) {
-        return info.executionResult.errorMessage ? "reverted" : "success";
-      }
-    } catch {
-      // not yet indexed by the node — keep polling
-    }
+    const info = await fetchTransactionExecutionInfo(txHash);
+    if (info) return info.errorMessage ? "reverted" : "success";
     await sleep(5_000);
   }
   return "not_found";
+}
+
+interface RawExecutionInfo {
+  errorMessage?: string;
+  effectBytes: Uint8Array[];
+}
+
+async function fetchTransactionExecutionInfo(
+  txHash: string,
+): Promise<RawExecutionInfo | null> {
+  for (const transactionHash of [{ Version1: txHash }, { Deploy: txHash }]) {
+    const res = await fetch(rpcEndpointFor(POLL_NODE_URL), {
+      method: "POST",
+      headers: rpcHeadersFor(POLL_NODE_URL),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "info_get_transaction",
+        params: { transaction_hash: transactionHash },
+      }),
+    });
+    if (!res.ok) continue;
+    const data = (await res.json()) as {
+      result?: {
+        execution_info?: {
+          execution_result?: unknown;
+        };
+      };
+      error?: { message?: string; data?: string };
+    };
+    const executionResult = data.result?.execution_info?.execution_result;
+    if (!executionResult) continue;
+    return parseRawExecutionInfo(executionResult);
+  }
+  return null;
+}
+
+function parseRawExecutionInfo(executionResult: unknown): RawExecutionInfo {
+  const root = executionResult as Record<string, unknown>;
+  const versioned =
+    (root.Version2 as Record<string, unknown> | undefined) ??
+    (root.Version1 as Record<string, unknown> | undefined) ??
+    root;
+  const errorMessage =
+    typeof versioned.error_message === "string"
+      ? versioned.error_message
+      : typeof versioned.errorMessage === "string"
+        ? versioned.errorMessage
+        : undefined;
+  const effects = Array.isArray(versioned.effects) ? versioned.effects : [];
+  const effectBytes: Uint8Array[] = [];
+  for (const effect of effects) {
+    const e = effect as {
+      kind?: { Write?: { CLValue?: { bytes?: unknown } } };
+      transform?: { WriteCLValue?: { bytes?: unknown } };
+    };
+    const bytes =
+      e.kind?.Write?.CLValue?.bytes ?? e.transform?.WriteCLValue?.bytes;
+    if (typeof bytes === "string" && /^[0-9a-f]*$/i.test(bytes)) {
+      effectBytes.push(Buffer.from(bytes, "hex"));
+    }
+  }
+  return { errorMessage, effectBytes };
 }
 
 export interface PublishParams {
@@ -352,42 +508,22 @@ export async function confirmPublishedId(
   txHash: string,
   timeoutMs = 120_000,
 ): Promise<bigint> {
-  const client = loadClient();
   const deadline = Date.now() + timeoutMs;
 
-  let executionInfo: { executionResult: { errorMessage?: string; effects: unknown[] } } | undefined;
+  let executionInfo: RawExecutionInfo | null = null;
   while (Date.now() < deadline) {
-    try {
-      const res = await client.getTransactionByTransactionHash(txHash);
-      if (res.executionInfo) {
-        executionInfo = res.executionInfo as typeof executionInfo;
-        break;
-      }
-    } catch {
-      // Tx not yet indexed by the node — keep polling.
-    }
+    executionInfo = await fetchTransactionExecutionInfo(txHash);
+    if (executionInfo) break;
     await sleep(3_000);
   }
   if (!executionInfo) {
     throw new Error(`Tx ${txHash} not finalized within ${timeoutMs}ms`);
   }
-  const err = executionInfo.executionResult.errorMessage;
-  if (err) {
-    throw new Error(`Tx ${txHash} reverted: ${err}`);
+  if (executionInfo.errorMessage) {
+    throw new Error(`Tx ${txHash} reverted: ${executionInfo.errorMessage}`);
   }
 
-  for (const t of executionInfo.executionResult.effects as Array<{
-    key: { type: number };
-    kind: { isWriteCLValue: () => boolean; parseAsWriteCLValue: () => CLValue };
-  }>) {
-    if (t.key.type !== KeyTypeID.Dictionary) continue;
-    if (!t.kind.isWriteCLValue()) continue;
-    let raw: Uint8Array;
-    try {
-      raw = t.kind.parseAsWriteCLValue().bytes();
-    } catch {
-      continue;
-    }
+  for (const raw of executionInfo.effectBytes) {
     const idx = findSubarray(raw, PROPHECY_PUBLISHED_MARKER);
     if (idx < 0) continue;
     const idOffset = idx + PROPHECY_PUBLISHED_MARKER.length;
@@ -425,6 +561,7 @@ export async function settleOnChain(p: SettleParams): Promise<string> {
 
 export interface RecordOutcomeParams {
   godId: string;
+  prophecyId: bigint;
   brierBp: number;
   settledAtMs: number;
 }
@@ -436,15 +573,24 @@ export async function recordOutcomeOnChain(
     process.env.REPUTATION_CONTRACT_HASH,
     "REPUTATION_CONTRACT_HASH",
   );
-  const args = Args.fromMap({
-    god_id: CLValue.newCLString(p.godId),
-    brier_bp: CLValue.newCLUInt32(p.brierBp),
-    settled_at: CLValue.newCLUint64(BigInt(p.settledAtMs)),
-  });
+  const entryPoint =
+    process.env.REPUTATION_OUTCOME_ENTRYPOINT ?? "record_outcome";
+  const args =
+    entryPoint === "record_prophecy_outcome"
+      ? Args.fromMap({
+          god_id: CLValue.newCLString(p.godId),
+          prophecy_id: CLValue.newCLUint64(p.prophecyId),
+          brier_bp: CLValue.newCLUInt32(p.brierBp),
+          settled_at: CLValue.newCLUint64(BigInt(p.settledAtMs)),
+        })
+      : Args.fromMap({
+          god_id: CLValue.newCLString(p.godId),
+          brier_bp: CLValue.newCLUInt32(p.brierBp),
+          settled_at: CLValue.newCLUint64(BigInt(p.settledAtMs)),
+        });
   return send(
     "admin",
-    (b) =>
-      b.byPackageHash(hash).entryPoint("record_outcome").runtimeArgs(args),
+    (b) => b.byPackageHash(hash).entryPoint(entryPoint).runtimeArgs(args),
     3_500_000_000,
   );
 }
@@ -525,9 +671,35 @@ function bytesreprBytes(b: Uint8Array): Uint8Array {
   return concat(u32LE(b.length), b);
 }
 
-// Encoding helpers for ProposalKind variants were removed when the contract
-// gained typed entry points (`propose_settle`) — callers pass strongly-typed
-// runtime args directly via Args.fromMap instead of byte-packing.
+/**
+ * Encode `PriestQuorum::ProposalKind::Custom { tag, payload }` as Odra's
+ * bytesrepr. Variant indices (in declaration order):
+ *   0 = WithdrawUsdc, 1 = LiquidateTemple, 2 = UpdateStrategy, 3 = Custom.
+ */
+function encodeCustomProposalKind(tag: string, payload: Uint8Array): Uint8Array {
+  const VARIANT_CUSTOM = 3;
+  return concat(
+    new Uint8Array([VARIANT_CUSTOM]),
+    bytesreprString(tag),
+    bytesreprBytes(payload),
+  );
+}
+
+/**
+ * Pantheon's settlement payload: (prophecy_id u64 LE, truth u8,
+ * source_value String). Stored inside ProposalKind::Custom.
+ */
+function encodeSettlementPayload(
+  prophecyId: bigint,
+  truth: boolean,
+  sourceValue: string,
+): Uint8Array {
+  return concat(
+    u64LE(prophecyId),
+    new Uint8Array([truth ? 1 : 0]),
+    bytesreprString(sourceValue),
+  );
+}
 
 export interface RegisterGodParams {
   godId: string;
@@ -605,31 +777,39 @@ export interface ProposeSettlementParams {
   sourceValue: string;
 }
 
-/**
- * God-signed call to `PriestQuorum.propose_settle` — the typed entry-point
- * that internally constructs `ProposalKind::SettleProphecy { prophecy_id,
- * truth, source_value }` and forwards to `propose`. Self-documenting on
- * cspr.live (callers no longer need to decode our private bytesrepr layout
- * for the Custom variant) while preserving the exact same auth semantics:
- * caller must be the god or priest registered for `godId`. The off-chain
- * orchestrator picks up the resulting ProposalCreated event when finalising
- * ProphecyRegistry.settle.
- */
 export async function proposeSettlementOnChain(
   p: ProposeSettlementParams,
 ): Promise<string> {
+  if (process.env.PRIEST_QUORUM_PROPOSE_MODE === "typed") {
+    const args = Args.fromMap({
+      god_id: CLValue.newCLString(p.godId),
+      prophecy_id: CLValue.newCLUint64(p.prophecyId),
+      truth: CLValue.newCLValueBool(p.truth),
+      source_value: CLValue.newCLString(p.sourceValue),
+    });
+    return send(
+      p.godId as SignerName,
+      (b) =>
+        b
+          .byPackageHash(priestQuorumHash())
+          .entryPoint("propose_settle")
+          .runtimeArgs(args),
+      3_500_000_000,
+    );
+  }
+
+  const payload = encodeSettlementPayload(p.prophecyId, p.truth, p.sourceValue);
+  const kindBytes = encodeCustomProposalKind("SettleProphecy", payload);
   const args = Args.fromMap({
     god_id: CLValue.newCLString(p.godId),
-    prophecy_id: CLValue.newCLUint64(p.prophecyId),
-    truth: CLValue.newCLValueBool(p.truth),
-    source_value: CLValue.newCLString(p.sourceValue),
+    kind: CLValue.newCLAny(kindBytes),
   });
   return send(
     p.godId as SignerName,
     (b) =>
       b
         .byPackageHash(priestQuorumHash())
-        .entryPoint("propose_settle")
+        .entryPoint("propose")
         .runtimeArgs(args),
     3_500_000_000,
   );
@@ -670,42 +850,22 @@ export async function confirmProposalCreatedId(
   txHash: string,
   timeoutMs = 120_000,
 ): Promise<bigint> {
-  const client = loadClient();
   const deadline = Date.now() + timeoutMs;
 
-  let executionInfo: { executionResult: { errorMessage?: string; effects: unknown[] } } | undefined;
+  let executionInfo: RawExecutionInfo | null = null;
   while (Date.now() < deadline) {
-    try {
-      const res = await client.getTransactionByTransactionHash(txHash);
-      if (res.executionInfo) {
-        executionInfo = res.executionInfo as typeof executionInfo;
-        break;
-      }
-    } catch {
-      // not yet indexed
-    }
+    executionInfo = await fetchTransactionExecutionInfo(txHash);
+    if (executionInfo) break;
     await sleep(3_000);
   }
   if (!executionInfo) {
     throw new Error(`Tx ${txHash} not finalized within ${timeoutMs}ms`);
   }
-  const err = executionInfo.executionResult.errorMessage;
-  if (err) {
-    throw new Error(`Tx ${txHash} reverted: ${err}`);
+  if (executionInfo.errorMessage) {
+    throw new Error(`Tx ${txHash} reverted: ${executionInfo.errorMessage}`);
   }
 
-  for (const t of executionInfo.executionResult.effects as Array<{
-    key: { type: number };
-    kind: { isWriteCLValue: () => boolean; parseAsWriteCLValue: () => CLValue };
-  }>) {
-    if (t.key.type !== KeyTypeID.Dictionary) continue;
-    if (!t.kind.isWriteCLValue()) continue;
-    let raw: Uint8Array;
-    try {
-      raw = t.kind.parseAsWriteCLValue().bytes();
-    } catch {
-      continue;
-    }
+  for (const raw of executionInfo.effectBytes) {
     const idx = findSubarray(raw, PROPOSAL_CREATED_MARKER);
     if (idx < 0) continue;
     const idOffset = idx + PROPOSAL_CREATED_MARKER.length;
@@ -724,8 +884,7 @@ import { blake2b } from "@noble/hashes/blake2b";
 
 /**
  * The `reputations` mapping is the third user field declared on the
- * Reputation Odra module (admin / writer / reputations / alpha_bp /
- * miss_penalty_bp), but Odra prefixes user fields with one internal slot —
+ * Reputation Odra module. Odra prefixes user fields with one internal slot,
  * so the runtime field index is 3. Confirmed by direct testnet query.
  */
 const REPUTATIONS_FIELD_INDEX = 3;
@@ -754,7 +913,7 @@ export interface ChainReputation {
   accuracyBp: number;
   prophecies_settled: number;
   prophecies_missed: number;
-  /** Unix timestamp (ms) of the last record_outcome call. */
+  /** Unix timestamp (ms) of the last reputation outcome call. */
   lastUpdatedMs: bigint;
 }
 
@@ -770,7 +929,6 @@ export interface ChainReputation {
 export async function readReputationFromChain(
   godId: string,
 ): Promise<ChainReputation | null> {
-  const client = loadClient();
   const contractHash = mustHex(
     process.env.REPUTATION_CONTRACT_VERSION_HASH ??
       process.env.REPUTATION_CONTRACT_HASH,
@@ -786,9 +944,7 @@ export async function readReputationFromChain(
   const dictKey = odraMappingDictKey(REPUTATIONS_FIELD_INDEX, godId);
 
   // Step 3: get_dictionary_item by URef.
-  const stateRootHash = (
-    await client.getStateRootHashLatest()
-  ).stateRootHash.toHex();
+  const stateRootHash = await fetchLatestStateRootHash();
   const body = {
     jsonrpc: "2.0",
     id: 1,
@@ -808,6 +964,11 @@ export async function readReputationFromChain(
     headers: rpcHeaders(),
     body: JSON.stringify(body),
   });
+  if (!res.ok) {
+    throw new Error(
+      `state_get_dictionary_item HTTP ${res.status}: ${await res.text()}`,
+    );
+  }
   const data = (await res.json()) as {
     result?: {
       stored_value?: { CLValue?: { bytes?: string } };
@@ -858,8 +1019,41 @@ function rpcEndpoint(): string {
 
 function rpcHeaders(): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json" };
-  if (AUTH) h.Authorization = AUTH;
+  if (AUTH && shouldUseCSPRCloudAuth(NODE_URL)) h.Authorization = AUTH;
   return h;
+}
+
+async function fetchLatestStateRootHash(): Promise<string> {
+  const body = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "chain_get_state_root_hash",
+    params: {},
+  };
+  const res = await fetch(rpcEndpoint(), {
+    method: "POST",
+    headers: rpcHeaders(),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `chain_get_state_root_hash HTTP ${res.status}: ${await res.text()}`,
+    );
+  }
+  const data = (await res.json()) as {
+    result?: { state_root_hash?: string };
+    error?: { message?: string; data?: string };
+  };
+  if (data.error) {
+    throw new Error(
+      `chain_get_state_root_hash failed: ${data.error.message}: ${data.error.data}`,
+    );
+  }
+  const stateRootHash = data.result?.state_root_hash;
+  if (!stateRootHash) {
+    throw new Error("chain_get_state_root_hash returned no state_root_hash");
+  }
+  return stateRootHash;
 }
 
 /** Fetch the `state` URef from the contract entity's named keys. */
@@ -881,13 +1075,22 @@ async function fetchContractStateUref(
     headers: rpcHeaders(),
     body: JSON.stringify(body),
   });
+  if (!res.ok) {
+    throw new Error(`query_global_state HTTP ${res.status}: ${await res.text()}`);
+  }
   const data = (await res.json()) as {
     result?: {
       stored_value?: {
         Contract?: { named_keys?: Array<{ name: string; key: string }> };
       };
     };
+    error?: { message?: string; data?: string };
   };
+  if (data.error) {
+    throw new Error(
+      `query_global_state failed: ${data.error.message}: ${data.error.data}`,
+    );
+  }
   const nk = data.result?.stored_value?.Contract?.named_keys ?? [];
   const state = nk.find((k) => k.name === "state");
   return state?.key ?? null;
@@ -951,12 +1154,12 @@ export interface ConsultReceipt {
 }
 
 /**
- * Petitioner-signed on-chain receipt for a consultation. The petitioner
- * issues a tiny self-transfer whose `id` is derived from the receipt hash.
- * The transfer lands on chain as a verifiable attestation: "this account
- * received this answer for this payment". Anyone with the off-chain
- * (question, answer, settleTx) can recompute the hash and confirm the
- * matching transfer-id on cspr.live without trusting our database.
+ * On-chain receipt for a consultation. The configured receipt signer issues a
+ * tiny transfer whose `id` is derived from the receipt hash. The transfer lands
+ * on chain as a verifiable commitment to "this answer was issued for this
+ * x402 settlement". Anyone with the off-chain (question, answer, settleTx) can
+ * recompute the hash and confirm the matching transfer-id on cspr.live without
+ * trusting our database.
  */
 export async function recordConsultReceiptOnChain(
   p: ConsultReceiptParams,
@@ -973,7 +1176,6 @@ export async function recordConsultReceiptOnChain(
   );
 
   const key = loadSigner("petitioner");
-  const client = loadClient();
   const recipientPubKey = PublicKey.fromHex(p.recipientPublicKeyHex);
   // NativeTransferBuilder.payment() takes a JS number; amount() takes a
   // string-or-BigNumber CLUInt512; id() takes a JS number. Target must be a
@@ -989,9 +1191,8 @@ export async function recordConsultReceiptOnChain(
     .id(transferId)
     .build();
   await tx.sign(key);
-  const res = await client.putTransaction(tx);
   return {
-    txHash: res.transactionHash.toHex(),
+    txHash: await submitTransaction(tx, "petitioner"),
     hashHex,
     transferId: String(transferId),
   };

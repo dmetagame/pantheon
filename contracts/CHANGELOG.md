@@ -6,9 +6,9 @@ Changelog for `pantheon_contracts`.
 ### Added
 - `priest_quorum::propose_settle(god_id, prophecy_id, truth, source_value)`
   convenience entry-point that wraps the SettleProphecy variant of
-  `ProposalKind`. (Working tree only — redeploy blocked on the
-  wasm-toolchain issue; live contract still uses the generic `Custom`
-  variant carrying the same bytesrepr payload.)
+  `ProposalKind`. (Source path available; production defaults to the generic
+  `Custom` variant unless `PRIEST_QUORUM_PROPOSE_MODE=typed` is enabled
+  after a matching redeploy.)
 - `ProposalKind::SettleProphecy { prophecy_id, truth, source_value }`
   typed variant (working tree only).
 - `propose_settle_round_trip` unit test for the new variant.
@@ -25,7 +25,9 @@ Changelog for `pantheon_contracts`.
 - `reputation::Reputation` deployed to testnet at
   `7e07920bc99e415f89994a01534afa0a43172d727e2bacae9e864ef47310b1b2`.
 - `priest_quorum::PriestQuorum` deployed to testnet at
-  `cef55e4a11859d46562160105e2a04924feb8357951ed64abcc1cf553b31922f`.
+  `cef55e4a11859d46562160105e2a04924feb8357951ed64abcc1cf553b31922f`
+  initially; current production package is
+  `2ed7015d8995208ccb0d68ff14a7fd3ba2495a54855cd3f4d42e42ebae64706e`.
 - `pantheon_cli` deploy + scenario harness.
 
 ### Reputation

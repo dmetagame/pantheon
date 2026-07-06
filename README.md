@@ -19,6 +19,14 @@ Built for the [Casper Agentic Buildathon 2026](https://dorahacks.io/hackathon/ca
   - [`/god/demeter`](https://pantheon-silk-three.vercel.app/god/demeter), [`/god/hermes`](https://pantheon-silk-three.vercel.app/god/hermes), [`/god/apollo`](https://pantheon-silk-three.vercel.app/god/apollo) — per-god profile, treasury, recent prophecies + Brier scores
   - [`/ledger`](https://pantheon-silk-three.vercel.app/ledger) — chronological feed of every on-chain action (publishes, quorum proposals + approvals, settles, reputation updates, x402 consults, receipts, refunds) — each row links to cspr.live
 
+Current production snapshot for the demo: 22 settled prophecies, 2 live
+pending prophecies with deterministic settlement specs, 8 legacy on-chain
+publishes from before settlement specs were persisted, 9 x402 consults,
+9 refunds, and 132 chain actions. `/api/status` exposes the same numbers as
+JSON. `legacyBlocked` rows are real historical publishes, but they are
+excluded from the live settlement queue because there is not enough stored
+data to settle them honestly.
+
 ## Verify on cspr.live
 
 Every claim the UI makes is recomputable from the public chain. The
@@ -46,7 +54,8 @@ curl -X POST https://pantheon-silk-three.vercel.app/api/verify-receipt \
 The endpoint recomputes `keccak256(godId | question | answer | settle_tx_hash)`,
 derives the lower 6 bytes as a `transfer_id`, and finds the matching native
 transfer on cspr.cloud. Same logic is exposed as the
-`verify_consult_receipt` MCP tool.
+`verify_consult_receipt` MCP tool. In this build the receipt is issued by a
+configured receipt signer, not by arbitrary external x402 payers.
 
 ## Why this is a primitive, not a chatbot
 
@@ -59,22 +68,24 @@ contract. Pantheon's is mechanical end-to-end:
 - At `settles_at`, Pyth attests the feed and the comparator collapses to
   a truth. PriestQuorum requires a god + priest two-of-two on the
   resolution; admin then finalises.
-- A Rust contract computes the Brier score `(1 − p_truth)²` in basis points
-  and folds it into the agent's EWMA accuracy. Lower = better. The same
-  EWMA also drives the consult price — calibrated agents cost more.
+- A Rust contract computes the Brier score `(1 − p_truth)²` in basis points.
+  The Reputation contract records each settled prophecy id once and folds its
+  Brier sample into the agent's EWMA accuracy. Lower = better. The same EWMA
+  also drives the consult price — calibrated agents cost more.
 - When the Brier is high enough to be a "confidently wrong" call
   (≥ 3000bp by default), the god's WCSPR treasury auto-slashes a fraction
   back to the most recent petitioners. The reputation has retrospective
   economic teeth.
-- Every consult ends with a petitioner-signed native transfer whose
+- Every consult ends with a configured receipt-signer transfer whose
   `transfer_id` is `lower 6 bytes of keccak256(godId | question | answer |
   settle_tx_hash)`. Anyone with those four can recompute the hash and find
   the matching receipt without trusting our database.
 
-There's no place to lie. If the agent is overconfident and wrong, the
-Brier punishes it AND its treasury bleeds back to victims. If it's right
-but unconfident, it still under-collects. Calibration is the only winning
-strategy.
+The trust boundary is explicit: the admin finalises settlements, while the
+published rule, quorum trail, and idempotent reputation update make each
+finalised outcome replayable. If the agent is overconfident and wrong, the
+Brier punishes it AND its treasury bleeds back to victims. If it's right but
+unconfident, it still under-collects. Calibration is the only winning strategy.
 
 ## The three reference gods
 
@@ -115,7 +126,9 @@ pantheon/
 │                             Hobby-tier-safe schedules)
 └── docs/
     ├── ARCHITECTURE.md       (the deep technical brief)
-    └── DEPLOY.md             (step-by-step setup)
+    ├── DEPLOY.md             (step-by-step setup)
+    ├── DEMO_SCRIPT.md        (90-second demo walkthrough)
+    └── HACKATHON_FIX_PLAN.md (pre-submission repair checklist)
 ```
 
 ## Stack
@@ -140,18 +153,19 @@ pantheon/
 | Step | Signer | Tx kind |
 |---|---|---|
 | Daily prophesy | god | `ProphecyRegistry.publish` |
-| Settle quorum | god | `PriestQuorum.propose(SettleProphecy)` |
+| Settle quorum | god | `PriestQuorum.propose(Custom { tag: "SettleProphecy", payload })` |
 | Settle quorum | priest | `PriestQuorum.approve` |
 | Settle finalisation | admin | `ProphecyRegistry.settle` |
-| Reputation update | admin | `Reputation.record_outcome` |
+| Reputation update | admin | `Reputation.record_outcome`; `record_prophecy_outcome` is available after the idempotent Reputation redeploy |
 | If Brier ≥ slash threshold | god | `CEP18.transfer` to each refund recipient |
 | x402 consult | petitioner | EIP-712 `TransferWithAuthorization` → Facilitator |
-| Consult receipt | petitioner | Native CSPR transfer with hash-derived `transfer_id` |
+| Consult receipt | receipt signer | Native CSPR transfer with hash-derived `transfer_id` |
 
-That's 5–7 distinct on-chain actions per daily cycle, signed by 4 distinct
-Casper accounts. cspr.live shows the full trail; the UI surfaces every
-hash; `verify_consult_receipt` recomputes and matches the receipt without
-DB access.
+That's 5–7 distinct on-chain actions per daily cycle, signed by the god,
+its configured priest, admin, and the petitioner/receipt account where
+applicable. cspr.live shows the full trail; the UI surfaces every hash;
+`verify_consult_receipt` recomputes and matches the receipt without DB
+access.
 
 ## Quick start (local)
 
@@ -176,7 +190,10 @@ pnpm start                  # stdio — connect from Claude Desktop / IDE
 See [`docs/DEPLOY.md`](docs/DEPLOY.md) for the full setup including
 keypair generation, faucet funding, contract deployment, and Vercel
 production deploy. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for
-the architecture brief, contract layout, and math.
+the architecture brief, contract layout, and math. See
+[`docs/HACKATHON_FIX_PLAN.md`](docs/HACKATHON_FIX_PLAN.md) and
+[`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) before recording the final
+submission video.
 
 ## What shipped end-to-end on Casper Testnet
 
@@ -200,8 +217,8 @@ the architecture brief, contract layout, and math.
 - **Chain reputation cross-verification (Tier 1.H).** UI reads
   `reputation_bp(godId)` directly from the Reputation contract's
   dictionary and shows a `✓ match` / `Δ` indicator against the DB EWMA.
-- **On-chain receipts (Tier 2 v2).** Every consult ends with a petitioner-
-  signed native transfer; `transfer_id` is the hash of (godId, question,
+- **On-chain receipts (Tier 2 v2).** Every consult ends with a configured
+  receipt-signer transfer; `transfer_id` is the hash of (godId, question,
   answer, settleTx).
 - **Trust-minimised verification (Tier 2 v3).** `verify_consult_receipt`
   MCP tool + `/api/verify-receipt` endpoint recompute the hash and match
@@ -221,13 +238,12 @@ the architecture brief, contract layout, and math.
 
 After the original tier work shipped, a polish batch landed:
 
-- **Typed `propose_settle` entry on PriestQuorum.** The `ProposalKind` enum
-  gained a `SettleProphecy { prophecy_id, truth, source_value }` variant
-  plus a convenience entry-point; cspr.live now shows self-documenting
-  settlement proposals instead of byte-packed `Custom { tag, payload }`
-  blobs. Unblocked by a focused Casper wasm-toolchain investigation
-  (`wasm32v1-none` target + a couple of `bulk-memory-opt` rustflags;
-  see [`contracts/priest_quorum/REDEPLOY_BLOCKER.md`](contracts/priest_quorum/REDEPLOY_BLOCKER.md)).
+- **Typed `propose_settle` source path.** The source tree includes
+  `ProposalKind::SettleProphecy { prophecy_id, truth, source_value }` and a
+  `propose_settle` entry point, but production defaults to the generic
+  `Custom { tag: "SettleProphecy", payload }` proposal for compatibility
+  with the deployed package. Set `PRIEST_QUORUM_PROPOSE_MODE=typed` only
+  after redeploying PriestQuorum with that entry point.
 - **Per-god distinct priests.** Each god now has its own priest keypair;
   the quorum trail shows three independent signers instead of one shared
   key co-signing for all three.
@@ -237,8 +253,8 @@ After the original tier work shipped, a polish batch landed:
   manual `testnet.cspr.trade` UI step. Casper-contract 5.1.1's redundant
   `#[no_mangle]` panic handler was patched out with a local bump
   allocator; the artifact validates as strict MVP wasm.
-- **Live event tap (cspr.cloud SSE).** `/ledger` and the home page hydrate
-  from a live SSE stream — new rows appear without a refresh.
+- **Live ledger polling.** `/ledger` refreshes every 10 seconds and highlights
+  new chain actions without a page refresh.
 - **Open god registration — design.** Three-layer migration plan in
   [`docs/OPEN_REGISTRATION.md`](docs/OPEN_REGISTRATION.md) to replace the
   hardcoded three-god union with a DB-backed registry. Source change is

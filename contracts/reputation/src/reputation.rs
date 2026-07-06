@@ -22,6 +22,7 @@ pub enum Error {
     InvalidAlpha = 3,
     InvalidBrier = 4,
     NotInitialized = 5,
+    OutcomeAlreadyRecorded = 6,
 }
 
 #[odra::odra_type]
@@ -47,6 +48,7 @@ impl Default for GodReputation {
 #[odra::event]
 pub struct OutcomeRecorded {
     pub god_id: String,
+    pub prophecy_id: u64,
     pub brier_bp: u32,
     pub new_accuracy_bp: u32,
     pub prophecies_settled: u32,
@@ -65,6 +67,7 @@ pub struct Reputation {
     /// The ProphecyRegistry contract address — second authorized writer.
     writer: Var<Address>,
     reputations: Mapping<String, GodReputation>,
+    recorded_prophecies: Mapping<u64, bool>,
     alpha_bp: Var<u32>,
     miss_penalty_bp: Var<u32>,
 }
@@ -101,14 +104,51 @@ impl Reputation {
         self.miss_penalty_bp.set(penalty);
     }
 
-    /// Record a settled outcome. Updates the god's EWMA accuracy.
-    /// Callable by admin or the registered writer.
+    /// Record a settled prophecy outcome. Updates the god's EWMA accuracy.
+    /// Callable by admin or the registered writer. Each prophecy id may affect
+    /// reputation exactly once, so cron retries cannot double-count a Brier
+    /// sample after a partially completed settlement.
+    pub fn record_prophecy_outcome(
+        &mut self,
+        god_id: String,
+        prophecy_id: u64,
+        brier_bp: u32,
+        settled_at: u64,
+    ) {
+        self.require_authorized_writer();
+        if self
+            .recorded_prophecies
+            .get(&prophecy_id)
+            .unwrap_or_default()
+        {
+            self.env().revert(Error::OutcomeAlreadyRecorded);
+        }
+        if brier_bp > MAX_BP {
+            self.env().revert(Error::InvalidBrier);
+        }
+
+        self.record_outcome_inner(god_id, Some(prophecy_id), brier_bp, settled_at);
+    }
+
+    /// Legacy entrypoint kept for staged deployments. Prefer
+    /// `record_prophecy_outcome`, which binds reputation updates to a prophecy
+    /// id and rejects duplicates.
     pub fn record_outcome(&mut self, god_id: String, brier_bp: u32, settled_at: u64) {
         self.require_authorized_writer();
         if brier_bp > MAX_BP {
             self.env().revert(Error::InvalidBrier);
         }
 
+        self.record_outcome_inner(god_id, None, brier_bp, settled_at);
+    }
+
+    fn record_outcome_inner(
+        &mut self,
+        god_id: String,
+        prophecy_id: Option<u64>,
+        brier_bp: u32,
+        settled_at: u64,
+    ) {
         let alpha = self.alpha_bp.get_or_default();
         let mut rep = self.reputations.get(&god_id).unwrap_or_default();
 
@@ -123,9 +163,13 @@ impl Reputation {
         let new_accuracy_bp = rep.accuracy_bp;
         let prophecies_settled = rep.prophecies_settled;
         self.reputations.set(&god_id, rep);
+        if let Some(id) = prophecy_id {
+            self.recorded_prophecies.set(&id, true);
+        }
 
         self.env().emit_event(OutcomeRecorded {
             god_id,
+            prophecy_id: prophecy_id.unwrap_or_default(),
             brier_bp,
             new_accuracy_bp,
             prophecies_settled,
@@ -226,7 +270,7 @@ mod tests {
     #[test]
     fn first_outcome_seeds_accuracy() {
         let (_env, mut reputation, _admin) = deploy();
-        reputation.record_outcome("demeter".to_string(), 400, 1_700_000_000);
+        reputation.record_prophecy_outcome("demeter".to_string(), 1, 400, 1_700_000_000);
         let rep = reputation.get("demeter".to_string()).unwrap();
         assert_eq!(rep.accuracy_bp, 400);
         assert_eq!(rep.prophecies_settled, 1);
@@ -238,8 +282,8 @@ mod tests {
     fn second_outcome_blends_via_ewma() {
         let (_env, mut reputation, _admin) = deploy();
         // Default alpha = 500 bp (5%).
-        reputation.record_outcome("demeter".to_string(), 400, 1);
-        reputation.record_outcome("demeter".to_string(), 6_400, 2);
+        reputation.record_prophecy_outcome("demeter".to_string(), 1, 400, 1);
+        reputation.record_prophecy_outcome("demeter".to_string(), 2, 6_400, 2);
         // EWMA: 0.05 * 6400 + 0.95 * 400 = 320 + 380 = 700.
         let rep = reputation.get("demeter".to_string()).unwrap();
         assert_eq!(rep.accuracy_bp, 700);
@@ -249,7 +293,7 @@ mod tests {
     #[test]
     fn miss_inflates_accuracy() {
         let (_env, mut reputation, _admin) = deploy();
-        reputation.record_outcome("demeter".to_string(), 400, 1);
+        reputation.record_prophecy_outcome("demeter".to_string(), 1, 400, 1);
         reputation.record_miss("demeter".to_string());
         let rep = reputation.get("demeter".to_string()).unwrap();
         // 400 + 500 penalty = 900.
@@ -260,41 +304,56 @@ mod tests {
     #[test]
     fn miss_saturates_at_max() {
         let (_env, mut reputation, _admin) = deploy();
-        reputation.record_outcome("demeter".to_string(), 9_800, 1);
+        reputation.record_prophecy_outcome("demeter".to_string(), 1, 9_800, 1);
         reputation.record_miss("demeter".to_string());
         let rep = reputation.get("demeter".to_string()).unwrap();
         assert_eq!(rep.accuracy_bp, 10_000);
     }
 
     #[test]
-    fn writer_can_record_outcome() {
+    fn writer_can_record_prophecy_outcome() {
         let (env, mut reputation, _admin) = deploy();
         let writer = env.get_account(1);
         reputation.set_writer(writer);
 
         env.set_caller(writer);
-        reputation.record_outcome("demeter".to_string(), 400, 1);
-        assert_eq!(
-            reputation.reputation_bp("demeter".to_string()),
-            9_600
-        );
+        reputation.record_prophecy_outcome("demeter".to_string(), 1, 400, 1);
+        assert_eq!(reputation.reputation_bp("demeter".to_string()), 9_600);
     }
 
     #[test]
-    fn non_writer_cannot_record_outcome() {
+    fn non_writer_cannot_record_prophecy_outcome() {
         let (env, mut reputation, _admin) = deploy();
         let rando = env.get_account(2);
         env.set_caller(rando);
-        let result = reputation.try_record_outcome("demeter".to_string(), 400, 1);
+        let result = reputation.try_record_prophecy_outcome("demeter".to_string(), 1, 400, 1);
         assert!(result.is_err());
     }
 
     #[test]
     fn invalid_brier_reverts() {
         let (_env, mut reputation, _admin) = deploy();
-        let result =
-            reputation.try_record_outcome("demeter".to_string(), 20_000, 1);
+        let result = reputation.try_record_prophecy_outcome("demeter".to_string(), 1, 20_000, 1);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn duplicate_prophecy_outcome_reverts() {
+        let (_env, mut reputation, _admin) = deploy();
+        reputation.record_prophecy_outcome("demeter".to_string(), 1, 400, 1);
+        let result = reputation.try_record_prophecy_outcome("demeter".to_string(), 1, 900, 2);
+        assert!(result.is_err());
+
+        let rep = reputation.get("demeter".to_string()).unwrap();
+        assert_eq!(rep.accuracy_bp, 400);
+        assert_eq!(rep.prophecies_settled, 1);
+    }
+
+    #[test]
+    fn legacy_record_outcome_still_works() {
+        let (_env, mut reputation, _admin) = deploy();
+        reputation.record_outcome("demeter".to_string(), 400, 1);
+        assert_eq!(reputation.reputation_bp("demeter".to_string()), 9_600);
     }
 
     #[test]

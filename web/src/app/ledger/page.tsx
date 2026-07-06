@@ -1,12 +1,9 @@
 import Link from "next/link";
-import { getLedger, type LedgerEntry, type LedgerKind } from "@/lib/ledger";
-import { GODS, type GodId } from "@pantheon/agents";
-import { GOD_ACCENT } from "../_sigils";
+import { getLedger, type LedgerKind } from "@/lib/ledger";
+import type { GodId } from "@pantheon/agents";
 import { LiveLedger, type LedgerEntryWire } from "./_live";
 
 export const dynamic = "force-dynamic";
-
-const EXPLORER = "https://cspr.live/deploy";
 
 const KIND_LABEL: Record<LedgerKind, string> = {
   publish: "publish",
@@ -30,57 +27,6 @@ const KIND_DOT: Record<LedgerKind, string> = {
   "consult-receipt": "bg-gold/60",
   refund: "bg-amphora",
 };
-
-function fmtRelative(d: Date): string {
-  const ms = Date.now() - new Date(d).getTime();
-  const m = Math.floor(ms / 60_000);
-  const h = Math.floor(m / 60);
-  const days = Math.floor(h / 24);
-  if (days >= 1) return `${days}d ago`;
-  if (h >= 1) return `${h}h ago`;
-  if (m >= 1) return `${m}m ago`;
-  return "<1m ago";
-}
-
-function short(hash: string): string {
-  return `${hash.slice(0, 8)}…${hash.slice(-4)}`;
-}
-
-function Row({ e }: { e: LedgerEntry }) {
-  const god = GODS[e.god_id];
-  const accent = GOD_ACCENT[e.god_id];
-  return (
-    <li className="grid grid-cols-[auto_1fr_auto] items-baseline gap-3 border-b border-ink/5 px-1 py-2.5 text-sm last:border-0">
-      <span
-        className={`inline-block size-2 translate-y-[3px] rounded-full ${KIND_DOT[e.kind]}`}
-        title={KIND_LABEL[e.kind]}
-      />
-      <div className="min-w-0">
-        <p className="truncate">
-          <Link
-            href={`/god/${e.god_id}`}
-            className={`font-medium ${accent.text} hover:underline`}
-          >
-            {god.name}
-          </Link>{" "}
-          <span className="text-ink/60">— {KIND_LABEL[e.kind]}</span>
-          <span className="text-ink/40"> · {e.detail}</span>
-        </p>
-      </div>
-      <a
-        href={`${EXPLORER}/${e.tx_hash}`}
-        target="_blank"
-        rel="noreferrer"
-        className="font-mono text-[11px] text-ink/40 hover:text-gold"
-      >
-        {short(e.tx_hash)} ↗
-      </a>
-      <span />
-      <p className="text-[11px] text-ink/40">{fmtRelative(e.ts)}</p>
-      <span />
-    </li>
-  );
-}
 
 export default async function LedgerPage() {
   const entries = await getLedger(150);

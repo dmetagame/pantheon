@@ -11,6 +11,23 @@ plain text.
   authed; environment loaded.
 - One browser pane open at https://pantheon-silk-three.vercel.app.
 - A second browser pane reserved for cspr.live deep-links.
+- Run the preflight below. Do not record while reputation verification is
+  failing or the ledger shows invalid tx links.
+
+## Preflight (off-camera)
+
+```sh
+curl -sS https://pantheon-silk-three.vercel.app/api/status | jq '{totals, gods: [.gods[] | {id, reputationBp, dbReputationBp, reputationVerified, pending:.prophecies_pending, legacy:.prophecies_legacy_blocked}]}'
+```
+
+Every god should show `reputationVerified: true`. Pending is fine only when
+the pending prophecies settle in the future. `legacyBlocked` rows are older
+on-chain publishes from before settlement specs were persisted; they should
+be visible as Legacy in the UI, not mixed into the live pending queue.
+
+Open `/ledger` and click the newest publish/propose/approve/settle/reputation
+rows. They should all resolve on cspr.live. If a row does not have a real
+Casper deploy hash, fix production data before recording.
 
 ## Beat 1 — The pitch (≈12s)
 
@@ -22,7 +39,7 @@ Land on `/`.
 > Brier-score reputation on chain. Their consult price scales with that
 > reputation. When they're confidently wrong, their treasury slashes."**
 
-Hover over Apollo's reputation tick (`✓ match`).
+Hover over a reputation tick (`✓ match`).
 
 > **"Every score on this page is recomputed live from the Reputation
 > contract — not our database."**
@@ -31,14 +48,15 @@ Hover over Apollo's reputation tick (`✓ match`).
 
 Click into **/god/apollo**.
 
-> **"Apollo's at 86% — calibrated. Each prophecy is sealed with a
-> settlement spec: feed, comparator, threshold. The publish tx and the
-> Brier score for the settle are on chain."**
+> **"Apollo is the macro and real-world-assets oracle. Current prophecies
+> are sealed with a settlement spec: feed, comparator, threshold. The
+> publish tx and the Brier score for the settle are on chain."**
 
 Scroll to a recent settled prophesy. Click its publish tx hash → cspr.live.
 
 > **"That's the actual `ProphecyRegistry.publish` event — feed, threshold,
-> confidence in basis points, all in the runtime args."**
+> confidence in basis points, and settlement timestamp all in the runtime
+> args."**
 
 Switch back to the app.
 
@@ -49,8 +67,8 @@ Click **The Ledger** in the nav.
 > **"Every action — publish, quorum propose, priest approve, settle,
 > reputation update, x402 consult, on-chain receipt, slash refund — in one
 > chronological feed. Each row links to cspr.live for independent
-> verification. Right now there are seventy-plus actions logged across
-> three gods."**
+> verification. This is the audit trail judges can inspect without trusting
+> our database."**
 
 (Optional: hover the live-poll indicator showing "polling every 10s".)
 
@@ -115,7 +133,7 @@ End on the URL bar.
 - **Slash refund.** On `/god/<X>` find a "Bond slashed" amphora card —
   the moment reputation has economic teeth.
 - **Quorum trail.** On any settle in `/ledger`, expand to show the
-  god-propose + priest-approve + admin-settle three-tx sequence.
+  god-propose + priest-approve + admin-settle sequence.
 
 ## Don't say
 

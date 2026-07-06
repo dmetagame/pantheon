@@ -1,0 +1,17 @@
+.git
+.next
+node_modules
+web/.next
+web/node_modules
+packages/*/node_modules
+contracts/target
+contracts/**/target
+target
+.turbo
+.env
+.env.*
+web/.env.local
+contracts/.env
+*.log
+tsconfig.tsbuildinfo
+web/tsconfig.tsbuildinfo

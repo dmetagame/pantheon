@@ -14,26 +14,27 @@ artifact is verifiable on cspr.live.
 ┌──────────────────────────────────────────────────────────────────────┐
 │  AGENTS (signing keypairs, off-chain runtimes)                       │
 │  Demeter • Hermes • Apollo (self-custodying gods)                    │
-│  Priest (single co-signer for v1, per-god split on roadmap)          │
+│  Per-god priests (quorum co-signers)                                 │
 │  Admin (operator / oracle finaliser)                                 │
 │  Petitioner (autonomous agent customer, Claude-driven)               │
 └──────────────────┬───────────────────────────────────────────────────┘
                    │
                    ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  DAILY PROPHESY (Vercel Cron)                                        │
+│  DAILY PROPHESY (scheduled API call)                                 │
 │  per-god LLM brief + structured-output schema → ProphecyRegistry     │
 │  god-signed publish() tx → on_chain_id captured via CES event scan   │
 └──────────────────┬───────────────────────────────────────────────────┘
                    │
                    ▼ at settles_at
 ┌──────────────────────────────────────────────────────────────────────┐
-│  SETTLEMENT (Vercel Cron, /api/cron/settle)                          │
+│  SETTLEMENT (scheduled API call, /api/cron/settle)                   │
 │   1. Pyth Hermes attests the price feed                              │
-│   2. PriestQuorum.propose(SettleProphecy)   ← god signs              │
+│   2. PriestQuorum.propose(Custom SettleProphecy) ← god signs         │
 │   3. PriestQuorum.approve(proposalId)        ← priest co-signs       │
 │   4. ProphecyRegistry.settle()               ← admin finalises       │
 │   5. Reputation.record_outcome()             ← admin writes EWMA     │
+│      (record_prophecy_outcome available after idempotent redeploy)   │
 │   6. if Brier ≥ threshold → CEP18.transfer() ← god refunds petitioner│
 └──────────────────┬───────────────────────────────────────────────────┘
                    │
@@ -44,7 +45,7 @@ artifact is verifiable on cspr.live.
 │   • Petitioner signs TransferWithAuthorization (EIP-712)             │
 │   • Casper x402 Facilitator verify+settle                            │
 │   • LLM consult runs                                                 │
-│   • Petitioner signs native receipt (transfer_id = receipt hash)     │
+│   • Receipt signer sends native receipt (transfer_id = receipt hash) │
 └──────────────────┬───────────────────────────────────────────────────┘
                    │
                    ▼
@@ -59,16 +60,16 @@ artifact is verifiable on cspr.live.
 
 ## Identities on chain
 
-Every action is signed by one of six distinct Casper accounts:
+Every action is signed by one of the configured Casper accounts:
 
 | Role | Key | Signs |
 |---|---|---|
 | Demeter | `01c1f05a…` | publish, propose, refund (god-signed CEP18 transfer) |
 | Hermes | `017d96d6…` | publish, propose, refund |
 | Apollo | `01aea6e8…` | publish, propose, refund |
-| Priest | `0116d503…` | approve (quorum co-signer) |
-| Admin | `020372ac…` | register_god, settle, record_outcome, set_priesthood |
-| Petitioner | `0202cab0…` | x402 TransferWithAuthorization, receipt transfer |
+| Per-god priests | `PRIEST_<GOD>_PUBLIC_KEY` | approve (quorum co-signer) |
+| Admin | `020372ac…` | register_god, settle, record_outcome / record_prophecy_outcome, set_priesthood |
+| Petitioner / receipt signer | `0202cab0…` | x402 TransferWithAuthorization, receipt transfer |
 
 ## Contracts
 
@@ -76,18 +77,18 @@ Every action is signed by one of six distinct Casper accounts:
 |---|---|---|
 | `ProphecyRegistry` | `d1d0e57c…` | publish + settle binary prophecies, store outcomes |
 | `Reputation` | `7e07920b…` | EWMA Brier per god (α = 500bp), miss penalties, read via dictionary query |
-| `PriestQuorum` | `cef55e4a…` | god + priest two-of-two propose/approve/execute |
+| `PriestQuorum` | `2ed7015d…` | god + priest two-of-two propose/approve/execute |
 
 All written in Odra 2.7 / Rust, deployed via the `pantheon_cli` deploy
 script in `contracts/cli/`.
 
-The PriestQuorum currently uses its generic `Custom { tag, payload }`
+The live PriestQuorum path uses its generic `Custom { tag, payload }`
 variant to carry the SettleProphecy payload (bytesrepr-encoded
-`(prophecy_id, truth, source_value)`). A typed `SettleProphecy` variant
-exists in the working tree but the redeploy is blocked on a wasm-toolchain
-issue (Rust nightly emits bulk-memory ops the Casper interpreter rejects).
-The deployed encoding works identically; only the on-chain schema
-self-documentation is downstream.
+`(prophecy_id, truth, source_value)`). The source tree also has a typed
+`SettleProphecy` variant and `propose_settle` entry point; the SDK switches
+to that only when `PRIEST_QUORUM_PROPOSE_MODE=typed` is set after a matching
+contract redeploy. The deployed generic encoding is semantically identical
+and keeps production compatible with the current package.
 
 ## Reputation math
 
@@ -135,10 +136,11 @@ hash = keccak256(godId | question | answer | settle_tx_hash)
 transfer_id = lower 6 bytes of hash, little-endian (JS-safe integer)
 ```
 
-The petitioner signs a tiny native CSPR transfer to the god (2.5 CSPR — the
-Casper testnet native-transfer minimum) with `id = transfer_id`. The chain
-records the transfer; anyone with the four inputs can recompute the hash and
-look up the matching transfer in cspr.cloud's index. The
+The configured receipt signer sends a tiny native CSPR transfer to the god
+(2.5 CSPR — the Casper testnet native-transfer minimum) with
+`id = transfer_id`. The chain records the transfer; anyone with the four
+inputs can recompute the hash and look up the matching transfer in
+cspr.cloud's index. The
 `/api/verify-receipt` endpoint and the `verify_consult_receipt` MCP tool
 expose this verification without DB access.
 
@@ -184,20 +186,24 @@ pantheon/
     └── DEPLOY.md
 ```
 
-## Crons (Vercel)
+## Crons
 
 | Path | Schedule | Purpose |
 |---|---|---|
 | `/api/cron/prophesy/demeter` | `0 9 * * *` | Daily 09:00 UTC LLM prophesy + on-chain publish |
 | `/api/cron/prophesy/hermes` | `5 9 * * *` | 09:05 UTC |
 | `/api/cron/prophesy/apollo` | `10 9 * * *` | 09:10 UTC |
-| `/api/cron/settle` | `*/15 * * * *` | Resolve due prophecies, slash if Brier ≥ 3000bp |
+| `/api/cron/settle` | `*/15 * * * *` | Resolve claimable due prophecies, slash if Brier ≥ 3000bp |
 | `/api/cron/sweep` | `*/30 * * * *` | Backfill `on_chain_id` for rows whose publish event we missed |
 
 The settle cron is idempotent across crashes: each of its four chain-call
 steps + the closing UPDATE is persisted separately so a re-run from a
 mid-pipeline state skips the steps that already landed. See
 `web/src/app/api/cron/settle/route.ts`.
+
+Vercel Hobby hosts the app. High-cadence settle/sweep calls are driven from
+GitHub Actions and hit these same authenticated endpoints with
+`CRON_SECRET`.
 
 ## What we explicitly chose NOT to ship in v1
 
@@ -214,9 +220,7 @@ mid-pipeline state skips the steps that already landed. See
 
 ## What's on the v2 list
 
-- PriestQuorum redeploy with typed `SettleProphecy` variant (blocked on
-  the wasm-toolchain issue noted above).
-- Per-god distinct priests (currently one priest co-signs all three).
-- Programmatic CSPR → WCSPR wrap (currently a manual cspr.trade UI step).
+- PriestQuorum redeploy with typed `SettleProphecy` entry point enabled in
+  production via `PRIEST_QUORUM_PROPOSE_MODE=typed`.
 - Open registration path for new gods.
-- Live event tap from cspr.cloud SSE → real-time `/ledger` updates.
+- Recipient-level retry state for partial slash refunds.

@@ -64,7 +64,7 @@ export async function getGodDetail(godId: GodId): Promise<GodDetail | null> {
 
 export function prophecyStatus(p: ProphecyRow): {
   label: string;
-  tone: "pending" | "fulfilled" | "broken" | "unconfirmed";
+  tone: "pending" | "fulfilled" | "broken" | "unconfirmed" | "legacy";
 } {
   if (p.settled_at && p.truth !== null) {
     return p.truth === p.claim
@@ -73,6 +73,13 @@ export function prophecyStatus(p: ProphecyRow): {
   }
   if (p.on_chain_id == null) {
     return { label: "Unconfirmed", tone: "unconfirmed" };
+  }
+  if (
+    p.settlement_feed == null ||
+    p.settlement_comparator == null ||
+    p.settlement_threshold == null
+  ) {
+    return { label: "Legacy", tone: "legacy" };
   }
   return { label: "Awaiting", tone: "pending" };
 }

@@ -26,6 +26,7 @@ export interface LedgerEntryWire {
 }
 
 const EXPLORER = "https://cspr.live/deploy";
+const DEPLOY_HASH_RE = /^[0-9a-fA-F]{64}$/;
 
 const KIND_LABEL: Record<LedgerKind, string> = {
   publish: "publish",
@@ -68,6 +69,26 @@ function fmtRelative(d: Date): string {
 
 function short(hash: string): string {
   return `${hash.slice(0, 8)}…${hash.slice(-4)}`;
+}
+
+function DeployLink({ hash }: { hash: string }) {
+  if (!DEPLOY_HASH_RE.test(hash)) {
+    return (
+      <span className="font-mono text-[11px] text-ink/30">
+        unverified
+      </span>
+    );
+  }
+  return (
+    <a
+      href={`${EXPLORER}/${hash}`}
+      target="_blank"
+      rel="noreferrer"
+      className="font-mono text-[11px] text-ink/40 hover:text-gold"
+    >
+      {short(hash)} ↗
+    </a>
+  );
 }
 
 function rowKey(e: LedgerEntryWire): string {
@@ -180,14 +201,7 @@ export function LiveLedger({ initial, pollMs = 10_000 }: Props) {
                   <span className="text-ink/40"> · {e.detail}</span>
                 </p>
               </div>
-              <a
-                href={`${EXPLORER}/${e.tx_hash}`}
-                target="_blank"
-                rel="noreferrer"
-                className="font-mono text-[11px] text-ink/40 hover:text-gold"
-              >
-                {short(e.tx_hash)} ↗
-              </a>
+              <DeployLink hash={e.tx_hash} />
               <span />
               <p className="text-[11px] text-ink/40">
                 {fmtRelative(new Date(e.ts))}

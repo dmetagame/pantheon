@@ -7,16 +7,24 @@
 //   3. Query cspr.cloud for the god's recent native transfers
 //   4. Match by transfer id; report whether found
 //
-// Anyone with the four inputs can independently verify the consultation
-// happened — no DB trust required.
+// Anyone with the four inputs can independently verify that the configured
+// receipt signer committed to the consultation answer — no DB trust required.
 
 import { NextResponse } from "next/server";
 import { GODS } from "@pantheon/agents";
-import { consultReceiptHash, receiptHashToTransferId } from "@pantheon/sdk";
+import {
+  consultReceiptHash,
+  pubkeyToAccountKeyHex,
+  receiptHashToTransferId,
+} from "@pantheon/sdk";
 import { enforceRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const CASPER_DEPLOY_HASH_RE = /^[0-9a-fA-F]{64}$/;
+const MAX_QUESTION_CHARS = 2_000;
+const MAX_ANSWER_CHARS = 20_000;
 
 interface CsprCloudTransfer {
   id: number | string;
@@ -58,15 +66,36 @@ export async function POST(req: Request) {
     settleTxHash?: string;
   };
   if (
-    !godId ||
-    !question ||
-    !answer ||
-    !settleTxHash ||
+    typeof godId !== "string" ||
+    typeof question !== "string" ||
+    typeof answer !== "string" ||
+    typeof settleTxHash !== "string" ||
+    question.length === 0 ||
+    answer.length === 0 ||
     !(godId in GODS)
   ) {
     return NextResponse.json(
       { error: "godId, question, answer, settleTxHash all required" },
       { status: 400, headers: rlHeaders },
+    );
+  }
+
+  const cleanSettleTxHash = settleTxHash.trim();
+  if (!CASPER_DEPLOY_HASH_RE.test(cleanSettleTxHash)) {
+    return NextResponse.json(
+      { error: "settleTxHash must be a 64-character Casper deploy hash" },
+      { status: 400, headers: rlHeaders },
+    );
+  }
+  if (
+    question.length > MAX_QUESTION_CHARS ||
+    answer.length > MAX_ANSWER_CHARS
+  ) {
+    return NextResponse.json(
+      {
+        error: `question must be <= ${MAX_QUESTION_CHARS} chars and answer <= ${MAX_ANSWER_CHARS} chars`,
+      },
+      { status: 413, headers: rlHeaders },
     );
   }
 
@@ -77,9 +106,14 @@ export async function POST(req: Request) {
       { status: 500, headers: rlHeaders },
     );
   }
+  const godAccountKey = pubkeyToAccountKeyHex(godPubkey);
+  const receiptSignerPubkey = process.env.PETITIONER_PUBLIC_KEY;
+  const receiptSignerAccountKey = receiptSignerPubkey
+    ? pubkeyToAccountKeyHex(receiptSignerPubkey)
+    : null;
 
   // 1. recompute
-  const hash = consultReceiptHash(godId, question, answer, settleTxHash);
+  const hash = consultReceiptHash(godId, question, answer, cleanSettleTxHash);
   const transferId = receiptHashToTransferId(hash);
   const hashHex = Array.from(hash, (b) => b.toString(16).padStart(2, "0")).join(
     "",
@@ -104,17 +138,26 @@ export async function POST(req: Request) {
 
   // 3. match
   const target = String(transferId);
+  const expectedRecipient = normalizeAccountKey(godAccountKey);
+  const expectedInitiator = receiptSignerAccountKey
+    ? normalizeAccountKey(receiptSignerAccountKey)
+    : null;
   const match = data.data.find(
-    (t) => String(t.id) === target,
+    (t) =>
+      String(t.id) === target &&
+      normalizeAccountKey(t.to_account_hash) === expectedRecipient &&
+      (!expectedInitiator ||
+        normalizeAccountKey(t.initiator_account_hash) === expectedInitiator),
   );
 
   return NextResponse.json({
     verified: !!match,
-    inputs: { godId, question, answer, settleTxHash },
+    inputs: { godId, question, answer, settleTxHash: cleanSettleTxHash },
     expected: {
       receiptHashHex: hashHex,
       transferId: target,
-      godAccountKey: `00${godPubkey.slice(2).slice(0, 64) ?? ""}`,
+      godAccountKey,
+      receiptSignerAccountKey,
     },
     match: match
       ? {
@@ -126,7 +169,20 @@ export async function POST(req: Request) {
         }
       : null,
     explanation: match
-      ? "Receipt verified. The keccak256 of (godId | question | answer | settleTxHash) maps to the transfer-id of a native CSPR transfer to the god's account — proving the petitioner committed this exact answer on chain."
-      : "No matching receipt found among the god's recent 50 transfers. The consultation may not have been receipt-binded, or the inputs don't match what was originally signed.",
+      ? receiptSignerAccountKey
+        ? "Receipt verified. The keccak256 of (godId | question | answer | settleTxHash) maps to the transfer-id of a native CSPR transfer from the configured receipt signer to the god's account, committing this exact answer on chain."
+        : "Receipt verified. The keccak256 of (godId | question | answer | settleTxHash) maps to the transfer-id of a native CSPR transfer to the god's account. Configure PETITIONER_PUBLIC_KEY to also verify the receipt signer account."
+      : "No matching receipt found among the god's recent 50 transfers to the expected account. The consultation may not have been receipt-binded, the receipt signer may be misconfigured, or the inputs don't match what was originally signed.",
   }, { headers: rlHeaders });
+}
+
+function normalizeAccountKey(value: string): string {
+  const clean = value
+    .toLowerCase()
+    .replace(/^account-hash-/, "")
+    .replace(/^hash-/, "")
+    .replace(/^0x/, "");
+  if (clean.length === 66 && clean.startsWith("00")) return clean;
+  if (clean.length === 64) return `00${clean}`;
+  return clean;
 }

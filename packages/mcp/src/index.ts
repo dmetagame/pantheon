@@ -3,7 +3,13 @@ import { z } from "zod";
 import { consult, get } from "./api";
 
 const GOD_IDS = ["demeter", "hermes", "apollo"] as const;
-const STATUSES = ["pending", "settled", "fulfilled", "broken"] as const;
+const STATUSES = [
+  "pending",
+  "legacy",
+  "settled",
+  "fulfilled",
+  "broken",
+] as const;
 
 interface ScoreboardResponse {
   gods: Array<{
@@ -14,6 +20,7 @@ interface ScoreboardResponse {
     reputationBp: number;
     prophecies_settled: number;
     prophecies_pending: number;
+    prophecies_legacy_blocked: number;
     last_prophecy_at: string | null;
   }>;
 }
@@ -112,8 +119,9 @@ export function createServer(): McpServer {
         .enum(STATUSES)
         .optional()
         .describe(
-          "pending = not yet settled; settled = any outcome; fulfilled = claim " +
-            "matched truth; broken = claim contradicted truth.",
+          "pending = not yet settled and has a settlement spec; legacy = older " +
+            "on-chain publish without a persisted settlement spec; settled = any " +
+            "outcome; fulfilled = claim matched truth; broken = claim contradicted truth.",
         ),
       limit: z
         .number()
@@ -215,7 +223,12 @@ function matchesStatus(
 ): boolean {
   if (!status) return true;
   const settled = p.settled_at !== null && p.truth !== null;
-  if (status === "pending") return !settled;
+  const hasSpec =
+    p.settlement_feed !== null &&
+    p.settlement_comparator !== null &&
+    p.settlement_threshold !== null;
+  if (status === "pending") return !settled && hasSpec;
+  if (status === "legacy") return !settled && p.on_chain_id !== null && !hasSpec;
   if (status === "settled") return settled;
   if (status === "fulfilled") return settled && p.truth === p.claim;
   if (status === "broken") return settled && p.truth !== p.claim;

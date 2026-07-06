@@ -4,8 +4,8 @@
 //! admin oracle. The Brier score, computed at settle time, is the
 //! foundation of the Reputation system.
 
-use odra::prelude::*;
 use odra::casper_types::bytesrepr::Bytes;
+use odra::prelude::*;
 
 /// Confidence is expressed in basis points: 5000..=10000 (i.e. 50%..=100%).
 const MIN_CONFIDENCE_BP: u32 = 5000;
@@ -19,6 +19,7 @@ pub enum Error {
     ProphecyNotFound = 4,
     AlreadySettled = 5,
     NotInitialized = 6,
+    SettlementTooEarly = 7,
 }
 
 #[odra::odra_type]
@@ -144,6 +145,9 @@ impl ProphecyRegistry {
             .prophecies
             .get(&id)
             .unwrap_or_else(|| self.env().revert(Error::ProphecyNotFound));
+        if self.env().get_block_time() < prophecy.settles_at {
+            self.env().revert(Error::SettlementTooEarly);
+        }
 
         let brier_bp = brier_basis_points(prophecy.claim, prophecy.confidence_bp, truth);
 
@@ -222,8 +226,7 @@ mod tests {
         let env = odra_test::env();
         let admin = env.get_account(0);
         env.set_caller(admin);
-        let mut registry =
-            ProphecyRegistry::deploy(&env, ProphecyRegistryInitArgs { admin });
+        let mut registry = ProphecyRegistry::deploy(&env, ProphecyRegistryInitArgs { admin });
 
         let god_account = env.get_account(1);
         registry.register_god("demeter".to_string(), god_account);
@@ -248,8 +251,37 @@ mod tests {
         let env = odra_test::env();
         let admin = env.get_account(0);
         env.set_caller(admin);
-        let mut registry =
-            ProphecyRegistry::deploy(&env, ProphecyRegistryInitArgs { admin });
+        let mut registry = ProphecyRegistry::deploy(&env, ProphecyRegistryInitArgs { admin });
+
+        let god_account = env.get_account(1);
+        registry.register_god("demeter".to_string(), god_account);
+
+        env.set_caller(god_account);
+        let settles_at = env.block_time() + 86_400_000;
+        let id = registry.publish(
+            "demeter".to_string(),
+            Bytes::from(vec![1u8; 32]),
+            true,
+            8000,
+            settles_at,
+            "cspr.cloud/tvl".to_string(),
+        );
+
+        env.set_caller(admin);
+        env.advance_block_time(settles_at - env.block_time());
+        registry.settle(id, true, "TVL up 12%".to_string());
+        let outcome = registry.get_outcome(id).unwrap();
+        // Predicted yes with 80% conf, truth yes → p_truth=0.8 → brier=(0.2)² = 0.04 → 400 bp.
+        assert_eq!(outcome.brier_bp, 400);
+        assert!(outcome.truth);
+    }
+
+    #[test]
+    fn early_settle_reverts() {
+        let env = odra_test::env();
+        let admin = env.get_account(0);
+        env.set_caller(admin);
+        let mut registry = ProphecyRegistry::deploy(&env, ProphecyRegistryInitArgs { admin });
 
         let god_account = env.get_account(1);
         registry.register_god("demeter".to_string(), god_account);
@@ -265,11 +297,8 @@ mod tests {
         );
 
         env.set_caller(admin);
-        registry.settle(id, true, "TVL up 12%".to_string());
-        let outcome = registry.get_outcome(id).unwrap();
-        // Predicted yes with 80% conf, truth yes → p_truth=0.8 → brier=(0.2)² = 0.04 → 400 bp.
-        assert_eq!(outcome.brier_bp, 400);
-        assert!(outcome.truth);
+        let result = registry.try_settle(id, true, "TVL up 12%".to_string());
+        assert!(result.is_err());
     }
 
     #[test]
@@ -277,8 +306,7 @@ mod tests {
         let env = odra_test::env();
         let admin = env.get_account(0);
         env.set_caller(admin);
-        let mut registry =
-            ProphecyRegistry::deploy(&env, ProphecyRegistryInitArgs { admin });
+        let mut registry = ProphecyRegistry::deploy(&env, ProphecyRegistryInitArgs { admin });
 
         let god_account = env.get_account(1);
         registry.register_god("demeter".to_string(), god_account);

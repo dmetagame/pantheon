@@ -1,22 +1,22 @@
-// Backfill reputation_tx_hash for prophecies whose record_outcome landed on
-// chain before Tier 0 review added per-step persistence. We don't know the
-// actual tx hashes for those calls, but we DO know which subset of DB rows
-// must have been folded — because the chain's EWMA tells us.
+// Backfill reputation_backfilled for prophecies whose reputation outcome
+// landed on chain before Tier 0 review added per-step persistence. We don't
+// know the actual tx hashes for those calls, but we DO know which subset of DB
+// rows must have been folded — because the chain's EWMA tells us.
 //
 // For each god:
 //   1. Read chain accuracy_bp + prophecies_settled
 //   2. Pull all DB-settled brier samples ordered by settled_at
 //   3. Try every chronologically-ordered subset of size N = prophecies_settled
 //      whose fold produces chain accuracy_bp
-//   4. Mark the winning subset's rows with a sentinel hash so the EWMA filter
-//      includes them
+//   4. Mark the winning subset's rows with reputation_backfilled=true so the
+//      EWMA filter includes them without fabricating a deploy hash
 //
-// Idempotent: rows that already have reputation_tx_hash set are left alone.
+// Idempotent: rows that already have reputation_tx_hash or
+// reputation_backfilled=true are left alone.
 
 import postgres from "postgres";
 import { readReputationFromChain } from "@pantheon/sdk";
 
-const SENTINEL = "backfilled-pre-tier-0-review";
 const ALPHA_BP = 500;
 
 function foldEwma(samples: number[]): number {
@@ -33,6 +33,7 @@ interface Candidate {
   brier_bp: number;
   settled_at: Date;
   reputation_tx_hash: string | null;
+  reputation_backfilled: boolean;
 }
 
 /** Enumerate every size-k subset of `arr` (in original order), returning the
@@ -71,7 +72,7 @@ async function main(): Promise<void> {
     }
 
     const candidates = (await sql`
-      SELECT id, brier_bp, settled_at, reputation_tx_hash
+      SELECT id, brier_bp, settled_at, reputation_tx_hash, reputation_backfilled
       FROM prophecies
       WHERE god_id = ${godId}
         AND settled_at IS NOT NULL
@@ -91,10 +92,12 @@ async function main(): Promise<void> {
       continue;
     }
 
-    const toBackfill = subset.filter((s) => !s.reputation_tx_hash);
+    const toBackfill = subset.filter(
+      (s) => !s.reputation_tx_hash && !s.reputation_backfilled,
+    );
     if (toBackfill.length === 0) {
       console.log(
-        `${godId}: ✓ all ${chain.prophecies_settled} chain-acknowledged settlements already have reputation_tx_hash`,
+        `${godId}: ✓ all ${chain.prophecies_settled} chain-acknowledged settlements are already tracked`,
       );
       continue;
     }
@@ -105,7 +108,7 @@ async function main(): Promise<void> {
     for (const row of toBackfill) {
       await sql`
         UPDATE prophecies
-        SET reputation_tx_hash = ${SENTINEL}
+        SET reputation_backfilled = TRUE
         WHERE id = ${row.id};
       `;
     }
