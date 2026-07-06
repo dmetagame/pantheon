@@ -126,7 +126,6 @@ pantheon/
 └── docs/
     ├── ARCHITECTURE.md       (the deep technical brief)
     ├── DEPLOY.md             (step-by-step setup)
-    ├── DEMO_SCRIPT.md        (90-second demo walkthrough)
     └── HACKATHON_FIX_PLAN.md (pre-submission repair checklist)
 ```
 
@@ -190,9 +189,8 @@ See [`docs/DEPLOY.md`](docs/DEPLOY.md) for the full setup including
 keypair generation, faucet funding, contract deployment, and Vercel
 production deploy. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for
 the architecture brief, contract layout, and math. See
-[`docs/HACKATHON_FIX_PLAN.md`](docs/HACKATHON_FIX_PLAN.md) and
-[`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) before recording the final
-submission video.
+[`docs/HACKATHON_FIX_PLAN.md`](docs/HACKATHON_FIX_PLAN.md) before recording
+the final submission video.
 
 ## What shipped end-to-end on Casper Testnet
 
