@@ -19,13 +19,12 @@ Built for the [Casper Agentic Buildathon 2026](https://dorahacks.io/hackathon/ca
   - [`/god/demeter`](https://pantheon-silk-three.vercel.app/god/demeter), [`/god/hermes`](https://pantheon-silk-three.vercel.app/god/hermes), [`/god/apollo`](https://pantheon-silk-three.vercel.app/god/apollo) — per-god profile, treasury, recent prophecies + Brier scores
   - [`/ledger`](https://pantheon-silk-three.vercel.app/ledger) — chronological feed of every on-chain action (publishes, quorum proposals + approvals, settles, reputation updates, x402 consults, receipts, refunds) — each row links to cspr.live
 
-Current production snapshot for the demo: 22 settled prophecies, 2 live
-pending prophecies with deterministic settlement specs, 8 legacy on-chain
-publishes from before settlement specs were persisted, 9 x402 consults,
-9 refunds, and 132 chain actions. `/api/status` exposes the same numbers as
-JSON. `legacyBlocked` rows are real historical publishes, but they are
-excluded from the live settlement queue because there is not enough stored
-data to settle them honestly.
+Current production snapshot for the demo: 24 settled prophecies, 0 live
+pending prophecies, 8 legacy on-chain publishes from before settlement specs
+were persisted, 9 x402 consults, 9 refunds, and 140 chain actions.
+`/api/status` exposes the same numbers as JSON. `legacyBlocked` rows are
+real historical publishes, but they are excluded from the live settlement
+queue because there is not enough stored data to settle them honestly.
 
 ## Verify on cspr.live
 
