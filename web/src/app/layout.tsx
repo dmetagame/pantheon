@@ -1,18 +1,43 @@
 import type { Metadata } from "next";
-import { Cormorant_Garamond, Inter } from "next/font/google";
+import {
+  Cinzel,
+  Fraunces,
+  JetBrains_Mono,
+  Space_Grotesk,
+} from "next/font/google";
 import "./globals.css";
+import { MotionProvider } from "@/components/motion/motion-provider";
+import { SiteNav } from "@/components/brand/site-nav";
 
-const display = Cormorant_Garamond({
+// Brand — Roman inscription capitals for the wordmark and grand labels.
+const brand = Cinzel({
   subsets: ["latin"],
-  weight: ["300", "400", "500"],
-  style: ["normal", "italic"],
-  variable: "--font-display",
+  variable: "--font-cinzel",
   display: "swap",
 });
 
-const body = Inter({
+// Display — editorial serif for headlines; optical sizing keeps large
+// settings sharp and small settings sturdy.
+const display = Fraunces({
   subsets: ["latin"],
-  variable: "--font-body",
+  style: ["normal", "italic"],
+  axes: ["opsz"],
+  variable: "--font-fraunces",
+  display: "swap",
+});
+
+// Body / UI — the web3-native grotesque.
+const body = Space_Grotesk({
+  subsets: ["latin"],
+  variable: "--font-grotesk",
+  display: "swap",
+});
+
+// Mono — tx hashes, account keys, tabular numbers.
+const mono = JetBrains_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-jetbrains",
   display: "swap",
 });
 
@@ -28,8 +53,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${display.variable} ${body.variable}`}>
+    <html
+      lang="en"
+      className={`${brand.variable} ${display.variable} ${body.variable} ${mono.variable}`}
+    >
       <body className="min-h-screen bg-marble text-ink antialiased">
+        <MotionProvider />
+        <SiteNav />
         {children}
       </body>
     </html>

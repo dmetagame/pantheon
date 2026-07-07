@@ -19,7 +19,12 @@ function Stat({
   href?: string;
 }) {
   const valueEl = (
-    <dd className="mt-1 text-2xl font-light italic tabular-nums">{value}</dd>
+    <dd
+      className="mt-1 font-mono text-2xl font-light tabular-nums"
+      data-countup=""
+    >
+      {value}
+    </dd>
   );
   return (
     <div>
@@ -39,7 +44,7 @@ function Stat({
 
 function Step({ n, title, body }: { n: string; title: string; body: string }) {
   return (
-    <div className="rounded-sm border border-ink/10 bg-marble/40 p-5">
+    <div className="rounded-sm border border-ink/10 bg-marble/40 p-5" data-reveal="">
       <p
         className="text-2xl font-light italic text-gold"
         style={{ fontFamily: "var(--font-display)" }}
@@ -95,24 +100,20 @@ export default async function Home() {
   return (
     <main className="mx-auto max-w-5xl px-6 py-16">
       <header className="border-b border-ink/10 pb-12">
-        <div className="flex items-baseline justify-between gap-4">
-          <p className="text-xs uppercase tracking-[0.3em] text-amphora">
-            Calibrated AI reputation, on Casper
-          </p>
-          <Link
-            href="/ledger"
-            className="text-xs uppercase tracking-[0.3em] text-ink/50 hover:text-gold"
-          >
-            The Ledger →
-          </Link>
-        </div>
+        <p
+          className="text-xs uppercase tracking-[0.3em] text-amphora"
+          data-hero=""
+        >
+          Calibrated AI reputation, on Casper
+        </p>
         <h1
           className="mt-3 text-5xl font-light italic leading-tight"
           style={{ fontFamily: "var(--font-display)" }}
+          data-hero=""
         >
           Three gods. One primitive.
         </h1>
-        <p className="mt-4 max-w-2xl text-ink/70">
+        <p className="mt-4 max-w-2xl text-ink/70" data-hero="">
           Pantheon is a Rust contract suite that lets AI agents commit to
           binary predictions with calibrated confidence, settle them
           mechanically against public oracles, and accumulate a
@@ -120,21 +121,24 @@ export default async function Home() {
           is co-signed by the agent and a priest under a two-of-two quorum —
           the reputation that emerges has been witnessed, not asserted.
         </p>
-        <p className="mt-3 max-w-2xl text-sm italic text-ink/50">
+        <p className="mt-3 max-w-2xl text-sm italic text-ink/50" data-hero="">
           Demeter, Hermes, and Apollo are the three reference instances we
           ship. Open god registration is the next contract migration.
         </p>
       </header>
 
       <section className="mt-12">
-        <h2 className="text-xs uppercase tracking-[0.3em] text-amphora">
+        <h2
+          className="text-xs uppercase tracking-[0.3em] text-amphora"
+          data-hero=""
+        >
           The Living Pantheon
         </h2>
         <ul className="mt-6 grid gap-4 md:grid-cols-3">
           {gods.map((god) => {
             const accent = GOD_ACCENT[god.id];
             return (
-            <li key={god.id}>
+            <li key={god.id} data-hero="">
               <Link
                 href={`/god/${god.id}`}
                 className="group block rounded-sm border border-ink/15 bg-marble/60 p-6 transition hover:border-gold hover:shadow-md"
@@ -207,7 +211,7 @@ export default async function Home() {
         </ul>
       </section>
 
-      <section className="mt-16">
+      <section className="mt-16" data-reveal="">
         <h2 className="text-xs uppercase tracking-[0.3em] text-amphora">
           Witnessed
         </h2>
@@ -226,7 +230,10 @@ export default async function Home() {
       </section>
 
       <section className="mt-20">
-        <h2 className="text-xs uppercase tracking-[0.3em] text-amphora">
+        <h2
+          className="text-xs uppercase tracking-[0.3em] text-amphora"
+          data-reveal=""
+        >
           The Rite
         </h2>
         <ol className="mt-6 grid gap-6 md:grid-cols-3">

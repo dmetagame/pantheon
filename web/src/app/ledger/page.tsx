@@ -43,16 +43,20 @@ export default async function LedgerPage() {
       </Link>
 
       <header className="mt-8 border-b border-ink/10 pb-8">
-        <p className="text-xs uppercase tracking-[0.3em] text-amphora">
+        <p
+          className="text-xs uppercase tracking-[0.3em] text-amphora"
+          data-hero=""
+        >
           The Ledger
         </p>
         <h1
           className="mt-2 text-4xl font-light italic"
           style={{ fontFamily: "var(--font-display)" }}
+          data-hero=""
         >
           Every action, on chain.
         </h1>
-        <p className="mt-3 max-w-2xl text-sm text-ink/60">
+        <p className="mt-3 max-w-2xl text-sm text-ink/60" data-hero="">
           One feed of every artifact the Pantheon has committed to Casper —
           prophesies and the quorum that resolved them, x402 settlements and
           the receipts that bound them, slash refunds when a god&apos;s call

@@ -6,8 +6,15 @@
   --color-gold: #c9a45e;
   --color-laurel: #4a5d3a;
   --color-amphora: #8a5a3b;
-  /* --font-display / --font-body are injected at runtime by next/font in
-     layout.tsx so we can serve woff2 and the right weights. */
+  /* Font roles. The --font-cinzel/-fraunces/-grotesk/-jetbrains variables are
+     injected on <html> by next/font in layout.tsx (self-hosted woff2). Pages
+     reference the role names, never the family names, so swapping a family is
+     a one-line change here. */
+  --font-brand: var(--font-cinzel), serif;
+  --font-display: var(--font-fraunces), Georgia, serif;
+  --font-body: var(--font-grotesk), system-ui, sans-serif;
+  --font-sans: var(--font-grotesk), system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
 }
 
 body {
@@ -17,4 +24,37 @@ body {
     rgba(201, 164, 94, 0.06),
     transparent 60%
   );
+}
+
+/* Lenis smooth-scroll host classes (added to <html> at runtime). */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+.lenis.lenis-stopped {
+  overflow: hidden;
+}
+
+/* Gold shimmer sweep for the wordmark on hover. */
+@media (prefers-reduced-motion: no-preference) {
+  .brand-shimmer {
+    background: linear-gradient(
+      100deg,
+      currentColor 40%,
+      #c9a45e 50%,
+      currentColor 60%
+    );
+    background-size: 250% 100%;
+    background-position: 100% 0;
+    -webkit-background-clip: text;
+    background-clip: text;
+    transition: background-position 0.9s ease;
+  }
+  .brand-shimmer:hover {
+    background-position: 0 0;
+    -webkit-text-fill-color: transparent;
+  }
 }

@@ -377,23 +377,33 @@ export default async function GodPage({
       <header className="mt-8 border-b border-ink/10 pb-10">
         <div className="flex items-start justify-between gap-6">
           <div>
-            <p className={`text-xs uppercase tracking-[0.3em] ${accent.text}`}>
+            <p
+              className={`text-xs uppercase tracking-[0.3em] ${accent.text}`}
+              data-hero=""
+            >
               {meta.title}
             </p>
             <h1
               className="mt-2 text-6xl font-light italic"
               style={{ fontFamily: "var(--font-display)" }}
+              data-hero=""
             >
               {meta.name}
             </h1>
           </div>
-          <Sigil
-            godId={stats.id}
-            className={`size-16 shrink-0 ${accent.text} opacity-80`}
-          />
+          <span className="shrink-0" data-hero="">
+            <Sigil
+              godId={stats.id}
+              className={`size-16 ${accent.text} opacity-80`}
+            />
+          </span>
         </div>
-        <p className="mt-4 max-w-2xl text-ink/70">{meta.domain}</p>
-        <p className="mt-2 max-w-2xl text-sm italic text-ink/50">{voice}</p>
+        <p className="mt-4 max-w-2xl text-ink/70" data-hero="">
+          {meta.domain}
+        </p>
+        <p className="mt-2 max-w-2xl text-sm italic text-ink/50" data-hero="">
+          {voice}
+        </p>
 
         <dl className="mt-8 grid grid-cols-2 gap-6 border-t border-ink/10 pt-6 sm:grid-cols-5">
           <Field

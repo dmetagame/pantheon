@@ -15,23 +15,26 @@
   },
   "dependencies": {
     "@ai-sdk/gateway": "^1.0.0",
+    "@gsap/react": "^2.1.2",
     "@pantheon/agents": "workspace:*",
     "@pantheon/sdk": "workspace:*",
     "ai": "^5.0.0",
+    "gsap": "^3.15.0",
+    "lenis": "^1.3.25",
     "next": "^15.1.0",
+    "postgres": "^3.4.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "postgres": "^3.4.5",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.1",
+    "@tailwindcss/postcss": "^4.0.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "eslint": "^9.17.0",
     "eslint-config-next": "^15.1.0",
-    "@tailwindcss/postcss": "^4.0.0",
     "tailwindcss": "^4.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
