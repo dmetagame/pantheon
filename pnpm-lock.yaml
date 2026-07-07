@@ -105,6 +105,9 @@ importers:
       '@pantheon/agents':
         specifier: workspace:*
         version: link:../packages/agents
+      '@pantheon/petitioner':
+        specifier: workspace:*
+        version: link:../packages/petitioner
       '@pantheon/sdk':
         specifier: workspace:*
         version: link:../packages/sdk

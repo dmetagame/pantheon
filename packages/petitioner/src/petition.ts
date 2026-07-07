@@ -1,14 +1,17 @@
 // The Petitioner — an autonomous AI agent that approaches the Pantheon to
 // get a verifiable forecast.
 //
-// Usage:
+// Usage (CLI):
 //   pnpm --filter @pantheon/petitioner petition "Will BTC close above $62k today?"
 //
 // The agent uses three tools (list_pantheon, get_god, consult_god) wrapping
 // the same HTTP surface @pantheon/mcp exposes over stdio. Claude orchestrates
 // the decision: which god fits the question's domain, whose on-chain Brier
-// reputation is highest, whether to consult that god. The transcript prints
-// to stdout suitable for a demo recording.
+// reputation is highest, whether to consult that god.
+//
+// The core is event-driven: runPetition emits typed PetitionEvents as each
+// agent turn completes, so the same engine drives both the CLI transcript
+// (console printer below) and the website's streaming /api/petition route.
 
 import { generateText, stepCountIs, tool } from "ai";
 import { gateway } from "@ai-sdk/gateway";
@@ -19,146 +22,175 @@ import {
   type AcceptsEnvelope,
 } from "@pantheon/sdk";
 
-const API_BASE = process.env.PANTHEON_API_URL ?? "http://localhost:3030";
-const CONSULT_SECRET = process.env.PANTHEON_CONSULT_SECRET;
 const MODEL = process.env.PETITIONER_MODEL ?? "anthropic/claude-haiku-4-5";
-
-// If true, the petitioner attempts to sign + pay via real Casper x402 on a
-// 402 response. Off by default until CEP18 token funding is resolved; the
-// petitioner falls back to the demo bearer.
-const X402_ENABLED = process.env.PETITIONER_X402 === "1";
 
 const GOD_IDS = ["demeter", "hermes", "apollo"] as const;
 
+export interface PetitionConfig {
+  /** Base URL of the Pantheon HTTP API the tools call. */
+  apiBase?: string;
+  /** Sign + pay a real Casper x402 transfer on 402 responses. */
+  x402?: boolean;
+  /** Hackathon bearer fallback used when x402 is off. */
+  consultSecret?: string;
+  /** Receives every transcript event as it happens. */
+  onEvent?: (e: PetitionEvent) => void;
+}
+
+export type PetitionEvent =
+  | { type: "turn"; index: number; text: string }
+  | { type: "tool_call"; name: string; args: string }
+  | { type: "tool_result"; name: string; preview: string }
+  | { type: "final"; text: string }
+  | { type: "proof"; proof: ConsultOutcome };
+
+function resolveConfig(cfg?: PetitionConfig): Required<PetitionConfig> {
+  return {
+    apiBase:
+      cfg?.apiBase ?? process.env.PANTHEON_API_URL ?? "http://localhost:3030",
+    x402: cfg?.x402 ?? process.env.PETITIONER_X402 === "1",
+    consultSecret:
+      cfg?.consultSecret ?? process.env.PANTHEON_CONSULT_SECRET ?? "",
+    onEvent: cfg?.onEvent ?? (() => {}),
+  };
+}
+
 // ─── tools the petitioner can call ────────────────────────────────────────
 
-const tools = {
-  list_pantheon: tool({
-    description:
-      "List the AI gods of the Pantheon with their current on-chain reputation, settled vs pending prophecy counts, and 'last spoke' timestamp. Use this first to see who is available and how well-calibrated they are.",
-    inputSchema: z.object({}),
-    execute: async () => {
-      const res = await fetch(`${API_BASE}/api/scoreboard`);
-      if (!res.ok) throw new Error(`list_pantheon: ${res.status}`);
-      return await res.json();
-    },
-  }),
-
-  get_god: tool({
-    description:
-      "Get a single god's full profile — voice, allowed settlement feeds, and the 20 most recent prophecies with on-chain ids, the settlement spec each was sealed with, and Brier scores where already settled. Use this to evaluate a god's track record before consulting.",
-    inputSchema: z.object({
-      godId: z.enum(GOD_IDS).describe("Which god to fetch."),
-    }),
-    execute: async ({ godId }) => {
-      const res = await fetch(`${API_BASE}/api/god/${godId}`);
-      if (!res.ok) throw new Error(`get_god ${godId}: ${res.status}`);
-      return await res.json();
-    },
-  }),
-
-  consult_god: tool({
-    description:
-      "Ask a specific god a question. Returns the god's answer in their own voice. The endpoint follows the x402 payment-required pattern: the first request returns a 402 with a canonical accepts envelope describing the required CEP18 tithe; the petitioner then signs a TransferAuthorization with its own Casper key and retries with the X-Payment header. PANTHEON_CONSULT_SECRET as bearer is a hackathon fallback when CEP18 token funding hasn't been set up.",
-    inputSchema: z.object({
-      godId: z.enum(GOD_IDS),
-      question: z
-        .string()
-        .min(1)
-        .max(500)
-        .describe("The question to ask. One sentence works best."),
-    }),
-    execute: async ({ godId, question }) => {
-      const url = `${API_BASE}/api/consult/${godId}`;
-      const body = JSON.stringify({ question });
-
-      // 1. First attempt — empty when X402_ENABLED so we drive the real
-      //    x402 round-trip; bearer otherwise so the hackathon demo still
-      //    works when CEP18 token funding isn't yet in place.
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      if (!X402_ENABLED && CONSULT_SECRET) {
-        headers.Authorization = `Bearer ${CONSULT_SECRET}`;
-      }
-
-      const res = await fetch(url, { method: "POST", headers, body });
-      if (res.status !== 402) {
+function makeTools(cfg: Required<PetitionConfig>) {
+  const { apiBase, x402, consultSecret } = cfg;
+  return {
+    list_pantheon: tool({
+      description:
+        "List the AI gods of the Pantheon with their current on-chain reputation, settled vs pending prophecy counts, and 'last spoke' timestamp. Use this first to see who is available and how well-calibrated they are.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const res = await fetch(`${apiBase}/api/scoreboard`);
         if (!res.ok) {
-          throw new Error(`consult ${godId}: ${res.status} ${await res.text()}`);
+          throw new Error(`list_pantheon: ${res.status} from ${apiBase}`);
         }
         return await res.json();
-      }
+      },
+    }),
 
-      // 2. Got a 402 — parse the accepts envelope.
-      const envelope = (await res.json()) as AcceptsEnvelope;
-      const requirement = envelope.accepts?.[0];
-      if (!requirement) {
-        return {
-          paymentRequired: true,
-          x402Envelope: envelope,
-          hint: "Server returned a 402 with no accepts entry — cannot pay.",
-        };
-      }
+    get_god: tool({
+      description:
+        "Get a single god's full profile — voice, allowed settlement feeds, and the 20 most recent prophecies with on-chain ids, the settlement spec each was sealed with, and Brier scores where already settled. Use this to evaluate a god's track record before consulting.",
+      inputSchema: z.object({
+        godId: z.enum(GOD_IDS).describe("Which god to fetch."),
+      }),
+      execute: async ({ godId }) => {
+        const res = await fetch(`${apiBase}/api/god/${godId}`);
+        if (!res.ok) throw new Error(`get_god ${godId}: ${res.status}`);
+        return await res.json();
+      },
+    }),
 
-      if (!X402_ENABLED) {
-        return {
-          paymentRequired: true,
-          x402Envelope: envelope,
-          hint: "The temple demands an offering. PETITIONER_X402=1 enables on-chain payment via @casper-ecosystem/casper-eip-712; PANTHEON_CONSULT_SECRET enables the hackathon-stage bearer fallback.",
-        };
-      }
+    consult_god: tool({
+      description:
+        "Ask a specific god a question. Returns the god's answer in their own voice. The endpoint follows the x402 payment-required pattern: the first request returns a 402 with a canonical accepts envelope describing the required CEP18 tithe; the petitioner then signs a TransferAuthorization with its own Casper key and retries with the X-Payment header. PANTHEON_CONSULT_SECRET as bearer is a hackathon fallback when CEP18 token funding hasn't been set up.",
+      inputSchema: z.object({
+        godId: z.enum(GOD_IDS),
+        question: z
+          .string()
+          .min(1)
+          .max(500)
+          .describe("The question to ask. One sentence works best."),
+      }),
+      execute: async ({ godId, question }) => {
+        const url = `${apiBase}/api/consult/${godId}`;
+        const body = JSON.stringify({ question });
 
-      // 3. Sign the TransferAuthorization with the petitioner's Casper key
-      //    and retry with the X-Payment header. The signature digest is the
-      //    EIP-712 typed-data hash over the auth fields under a domain that
-      //    pins the network + token. The Casper Facilitator's /verify and
-      //    /settle endpoints reconstruct the same digest server-side.
-      let xPayment: string;
-      let signedPayer: string;
-      try {
-        const signer = loadSigner("petitioner");
-        const signed = await signPaymentPayload({
-          signerKey: signer,
-          recipient: requirement.payTo,
-          amount: requirement.amount,
-          paymentRequirements: requirement,
-          resourceUrl: requirement.resource ?? url,
-        });
-        xPayment = signed.header;
-        signedPayer = signer.publicKey.accountHash().toHex();
-      } catch (e) {
-        return {
-          paymentRequired: true,
-          x402Envelope: envelope,
-          signingError: e instanceof Error ? e.message : String(e),
-        };
-      }
-
-      const retry = await fetch(url, {
-        method: "POST",
-        headers: {
+        // 1. First attempt — empty when x402 so we drive the real
+        //    x402 round-trip; bearer otherwise so the hackathon demo still
+        //    works when CEP18 token funding isn't yet in place.
+        const headers: Record<string, string> = {
           "Content-Type": "application/json",
-          "X-Payment": xPayment,
-        },
-        body,
-      });
-      if (!retry.ok) {
-        const text = await retry.text();
-        return {
-          paymentRequired: true,
-          paid: false,
-          retryStatus: retry.status,
-          retryBody: text.slice(0, 600),
-          signedAs: signedPayer,
-          paidTo: requirement.payTo,
         };
-      }
-      const result = await retry.json();
-      return { ...result, paid: true, signedAs: signedPayer };
-    },
-  }),
-};
+        if (!x402 && consultSecret) {
+          headers.Authorization = `Bearer ${consultSecret}`;
+        }
+
+        const res = await fetch(url, { method: "POST", headers, body });
+        if (res.status !== 402) {
+          if (!res.ok) {
+            throw new Error(
+              `consult ${godId}: ${res.status} ${await res.text()}`,
+            );
+          }
+          return await res.json();
+        }
+
+        // 2. Got a 402 — parse the accepts envelope.
+        const envelope = (await res.json()) as AcceptsEnvelope;
+        const requirement = envelope.accepts?.[0];
+        if (!requirement) {
+          return {
+            paymentRequired: true,
+            x402Envelope: envelope,
+            hint: "Server returned a 402 with no accepts entry — cannot pay.",
+          };
+        }
+
+        if (!x402) {
+          return {
+            paymentRequired: true,
+            x402Envelope: envelope,
+            hint: "The temple demands an offering. PETITIONER_X402=1 enables on-chain payment via @casper-ecosystem/casper-eip-712; PANTHEON_CONSULT_SECRET enables the hackathon-stage bearer fallback.",
+          };
+        }
+
+        // 3. Sign the TransferAuthorization with the petitioner's Casper key
+        //    and retry with the X-Payment header. The signature digest is the
+        //    EIP-712 typed-data hash over the auth fields under a domain that
+        //    pins the network + token. The Casper Facilitator's /verify and
+        //    /settle endpoints reconstruct the same digest server-side.
+        let xPayment: string;
+        let signedPayer: string;
+        try {
+          const signer = loadSigner("petitioner");
+          const signed = await signPaymentPayload({
+            signerKey: signer,
+            recipient: requirement.payTo,
+            amount: requirement.amount,
+            paymentRequirements: requirement,
+            resourceUrl: requirement.resource ?? url,
+          });
+          xPayment = signed.header;
+          signedPayer = signer.publicKey.accountHash().toHex();
+        } catch (e) {
+          return {
+            paymentRequired: true,
+            x402Envelope: envelope,
+            signingError: e instanceof Error ? e.message : String(e),
+          };
+        }
+
+        const retry = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Payment": xPayment,
+          },
+          body,
+        });
+        if (!retry.ok) {
+          const text = await retry.text();
+          return {
+            paymentRequired: true,
+            paid: false,
+            retryStatus: retry.status,
+            retryBody: text.slice(0, 600),
+            signedAs: signedPayer,
+            paidTo: requirement.payTo,
+          };
+        }
+        const result = await retry.json();
+        return { ...result, paid: true, signedAs: signedPayer };
+      },
+    }),
+  };
+}
 
 // ─── system prompt ────────────────────────────────────────────────────────
 
@@ -195,7 +227,7 @@ Each god has a domain:
 If the question doesn't fit any god's domain, say so and don't force a
 consult.`;
 
-// ─── transcript printer ───────────────────────────────────────────────────
+// ─── transcript events ────────────────────────────────────────────────────
 
 interface StepLike {
   text?: string;
@@ -208,27 +240,37 @@ function trim(s: string, n: number): string {
   return `${s.slice(0, n)}…`;
 }
 
-function printStep(step: StepLike, idx: number): void {
+function emitStep(
+  step: StepLike,
+  idx: number,
+  onEvent: (e: PetitionEvent) => void,
+): void {
   if (step.text) {
-    console.log(`\n┌── petitioner (turn ${idx + 1}) ──`);
-    console.log(step.text);
-    console.log(`└──`);
+    onEvent({ type: "turn", index: idx, text: step.text });
   }
   for (const tc of step.toolCalls ?? []) {
     // The AI SDK v5 uses `input` for tool args; some versions still use `args`.
     const args = (tc.input ?? tc.args) as unknown;
-    console.log(`\n→ ${tc.toolName}(${trim(JSON.stringify(args), 120)})`);
+    onEvent({
+      type: "tool_call",
+      name: tc.toolName,
+      args: trim(JSON.stringify(args), 120),
+    });
   }
   for (const tr of step.toolResults ?? []) {
     const out = (tr.output ?? tr.result) as unknown;
     const text = typeof out === "string" ? out : JSON.stringify(out);
-    console.log(`← ${tr.toolName}: ${trim(text, 240)}`);
+    onEvent({
+      type: "tool_result",
+      name: tr.toolName,
+      preview: trim(text, 240),
+    });
   }
 }
 
-// ─── main ────────────────────────────────────────────────────────────────
+// ─── consult outcome extraction ──────────────────────────────────────────
 
-interface ConsultOutcome {
+export interface ConsultOutcome {
   god?: string;
   reputationBp?: number;
   paymentSettleTx?: string;
@@ -236,19 +278,29 @@ interface ConsultOutcome {
   receiptTxHash?: string;
   receiptHashHex?: string;
   payer?: string;
+  /** The exact question/answer pair — feeds the /verify page. */
+  question?: string;
+  answer?: string;
 }
-
-const EXPLORER_DEPLOY = "https://cspr.live/deploy";
-const EXPLORER_ACCOUNT = "https://testnet.cspr.live/account";
 
 function extractConsultOutcome(steps: StepLike[]): ConsultOutcome {
   const out: ConsultOutcome = {};
   for (const step of steps) {
+    for (const tc of step.toolCalls ?? []) {
+      if (tc.toolName === "consult_god") {
+        const args = (tc.input ?? tc.args) as
+          | { question?: string }
+          | undefined;
+        if (args?.question) out.question = args.question;
+      }
+    }
     for (const tr of step.toolResults ?? []) {
       const r = (tr.output ?? tr.result) as Record<string, unknown> | undefined;
       if (!r) continue;
       if (tr.toolName === "consult_god" && typeof r.answer === "string") {
         out.god = String(r.god ?? "");
+        out.answer = r.answer;
+        if (typeof r.question === "string") out.question = r.question;
         const payment = r.payment as Record<string, unknown> | undefined;
         if (payment) {
           out.paymentSettleTx = String(payment.settleTx ?? "");
@@ -274,6 +326,46 @@ function extractConsultOutcome(steps: StepLike[]): ConsultOutcome {
   return out;
 }
 
+// ─── engine ───────────────────────────────────────────────────────────────
+
+export async function runPetition(
+  question: string,
+  cfg?: PetitionConfig,
+): Promise<{ final: string; outcome: ConsultOutcome }> {
+  const resolved = resolveConfig(cfg);
+  const { onEvent } = resolved;
+
+  let emitted = 0;
+  const { text, steps } = await generateText({
+    model: gateway(MODEL),
+    system: SYSTEM,
+    prompt: question,
+    tools: makeTools(resolved),
+    // The agent should be done in 6–8 tool turns (list, maybe 1–2 get_god,
+    // 1 consult, plus the final summary). Cap so a runaway loop fails loud.
+    stopWhen: stepCountIs(8),
+    onStepFinish: (step) => {
+      emitStep(step as StepLike, emitted++, onEvent);
+    },
+  });
+
+  onEvent({ type: "final", text });
+
+  const outcome = extractConsultOutcome(steps as StepLike[]);
+  if (outcome.paymentSettleTx || outcome.receiptTxHash) {
+    onEvent({ type: "proof", proof: outcome });
+  }
+
+  return { final: text, outcome };
+}
+
+// ─── CLI printer ─────────────────────────────────────────────────────────
+
+const EXPLORER_DEPLOY =
+  process.env.CASPER_EXPLORER_TRANSACTION_URL ??
+  "https://testnet.cspr.live/transaction";
+const EXPLORER_ACCOUNT = "https://testnet.cspr.live/account";
+
 function fmtMotes(motes: string | undefined, symbol = "WCSPR", decimals = 9): string {
   if (!motes) return "—";
   const v = BigInt(motes);
@@ -288,59 +380,52 @@ function fmtMotes(motes: string | undefined, symbol = "WCSPR", decimals = 9): st
   return fracStr ? `${whole}.${fracStr} ${symbol}` : `${whole} ${symbol}`;
 }
 
-function printOnChainProof(outcome: ConsultOutcome): void {
-  // Only print the section if we actually have a real payment to surface;
-  // skips on demo-bearer / 402 paths.
-  if (!outcome.paymentSettleTx && !outcome.receiptTxHash) return;
-  console.log(`╔═══ On-chain proof ═══╗`);
-  if (outcome.god) {
-    console.log(`  God consulted     ${outcome.god}`);
-  }
-  if (outcome.reputationBp !== undefined) {
-    console.log(`  Trusted at        ${(outcome.reputationBp / 100).toFixed(2)}% on-chain reputation`);
-  }
-  if (outcome.paymentSettleTx) {
-    console.log(`  x402 settle       ${EXPLORER_DEPLOY}/${outcome.paymentSettleTx}`);
-    if (outcome.paymentAmountMotes) {
-      console.log(`    amount          ${fmtMotes(outcome.paymentAmountMotes)}`);
+function printEvent(e: PetitionEvent): void {
+  switch (e.type) {
+    case "turn":
+      console.log(`\n┌── petitioner (turn ${e.index + 1}) ──`);
+      console.log(e.text);
+      console.log(`└──`);
+      break;
+    case "tool_call":
+      console.log(`\n→ ${e.name}(${e.args})`);
+      break;
+    case "tool_result":
+      console.log(`← ${e.name}: ${e.preview}`);
+      break;
+    case "final":
+      console.log(`\n╔═══ Final Report ═══╗`);
+      console.log(e.text);
+      console.log(`╚════════════════════╝\n`);
+      break;
+    case "proof": {
+      const p = e.proof;
+      console.log(`╔═══ On-chain proof ═══╗`);
+      if (p.god) console.log(`  God consulted     ${p.god}`);
+      if (p.reputationBp !== undefined) {
+        console.log(
+          `  Trusted at        ${(p.reputationBp / 100).toFixed(2)}% on-chain reputation`,
+        );
+      }
+      if (p.paymentSettleTx) {
+        console.log(`  x402 settle       ${EXPLORER_DEPLOY}/${p.paymentSettleTx}`);
+        if (p.paymentAmountMotes) {
+          console.log(`    amount          ${fmtMotes(p.paymentAmountMotes)}`);
+        }
+      }
+      if (p.receiptTxHash) {
+        console.log(`  Receipt           ${EXPLORER_DEPLOY}/${p.receiptTxHash}`);
+        if (p.receiptHashHex) {
+          console.log(
+            `    keccak256       ${p.receiptHashHex.slice(0, 16)}…${p.receiptHashHex.slice(-8)}`,
+          );
+        }
+      }
+      if (p.payer) console.log(`  Petitioner        ${EXPLORER_ACCOUNT}/${p.payer}`);
+      console.log(`╚══════════════════════╝\n`);
+      break;
     }
   }
-  if (outcome.receiptTxHash) {
-    console.log(`  Receipt           ${EXPLORER_DEPLOY}/${outcome.receiptTxHash}`);
-    if (outcome.receiptHashHex) {
-      console.log(
-        `    keccak256       ${outcome.receiptHashHex.slice(0, 16)}…${outcome.receiptHashHex.slice(-8)}`,
-      );
-    }
-  }
-  if (outcome.payer) {
-    console.log(`  Petitioner        ${EXPLORER_ACCOUNT}/${outcome.payer}`);
-  }
-  console.log(`╚══════════════════════╝\n`);
-}
-
-export async function runPetition(question: string): Promise<{ final: string }> {
-  const { text, steps } = await generateText({
-    model: gateway(MODEL),
-    system: SYSTEM,
-    prompt: question,
-    tools,
-    // The agent should be done in 6–8 tool turns (list, maybe 1–2 get_god,
-    // 1 consult, plus the final summary). Cap so a runaway loop fails loud.
-    stopWhen: stepCountIs(8),
-  });
-
-  for (let i = 0; i < steps.length; i++) {
-    printStep(steps[i] as StepLike, i);
-  }
-  console.log(`\n╔═══ Final Report ═══╗`);
-  console.log(text);
-  console.log(`╚════════════════════╝\n`);
-
-  const outcome = extractConsultOutcome(steps as StepLike[]);
-  printOnChainProof(outcome);
-
-  return { final: text };
 }
 
 async function cli(): Promise<void> {
@@ -350,14 +435,17 @@ async function cli(): Promise<void> {
     process.exit(1);
   }
 
+  const cfg = resolveConfig();
   console.log(`\n╔══════ Pantheon Petitioner ══════╗`);
   console.log(`  Question: ${question}`);
   console.log(`  Model:    ${MODEL}`);
-  console.log(`  API:      ${API_BASE}`);
-  console.log(`  Auth:     ${CONSULT_SECRET ? "bearer (demo)" : "none — expect 402"}`);
+  console.log(`  API:      ${cfg.apiBase}`);
+  console.log(
+    `  Auth:     ${cfg.x402 ? "x402 (on-chain payment)" : cfg.consultSecret ? "bearer (demo)" : "none — expect 402"}`,
+  );
   console.log(`╚═════════════════════════════════╝`);
 
-  await runPetition(question);
+  await runPetition(question, { onEvent: printEvent });
 }
 
 const isDirectInvocation = (() => {

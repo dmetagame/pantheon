@@ -17,6 +17,7 @@
     "@ai-sdk/gateway": "^1.0.0",
     "@gsap/react": "^2.1.2",
     "@pantheon/agents": "workspace:*",
+    "@pantheon/petitioner": "workspace:*",
     "@pantheon/sdk": "workspace:*",
     "ai": "^5.0.0",
     "gsap": "^3.15.0",

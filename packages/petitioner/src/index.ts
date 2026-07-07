@@ -1,1 +1,6 @@
-export { runPetition } from "./petition";
+export {
+  runPetition,
+  type ConsultOutcome,
+  type PetitionConfig,
+  type PetitionEvent,
+} from "./petition";

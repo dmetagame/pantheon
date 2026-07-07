@@ -26,7 +26,7 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
-  transpilePackages: ["@pantheon/agents", "@pantheon/sdk"],
+  transpilePackages: ["@pantheon/agents", "@pantheon/sdk", "@pantheon/petitioner"],
   typedRoutes: true,
   turbopack: {
     root: resolve(__dirname, ".."),

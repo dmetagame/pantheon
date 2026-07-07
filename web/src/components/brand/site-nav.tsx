@@ -6,6 +6,8 @@ const LINKS = [
   { href: "/god/hermes", label: "Hermes" },
   { href: "/god/apollo", label: "Apollo" },
   { href: "/ledger", label: "Ledger" },
+  { href: "/petition", label: "Petition" },
+  { href: "/verify", label: "Verify" },
 ] as const;
 
 export function SiteNav() {
