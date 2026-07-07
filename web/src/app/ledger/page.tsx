@@ -60,8 +60,8 @@ export default async function LedgerPage() {
           One feed of every artifact the Pantheon has committed to Casper —
           prophesies and the quorum that resolved them, x402 settlements and
           the receipts that bound them, slash refunds when a god&apos;s call
-          was confidently wrong. Each row links to cspr.live for independent
-          verification.
+          was confidently wrong. Each row links to testnet.cspr.live for
+          independent verification.
         </p>
         <p className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-ink/50">
           {kinds.map((k) => (
@@ -101,7 +101,7 @@ export default async function LedgerPage() {
       )}
 
       <footer className="mt-16 border-t border-ink/10 pt-6 text-xs text-ink/50">
-        Anyone can independently verify each row via cspr.live. Consult
+        Anyone can independently verify each row via testnet.cspr.live. Consult
         receipts can be re-derived with{" "}
         <code className="rounded-sm bg-ink/5 px-1 py-0.5 font-mono text-[11px]">
           verify_consult_receipt

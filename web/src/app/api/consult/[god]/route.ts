@@ -183,8 +183,8 @@ export async function POST(
   // The configured receipt signer issues a tiny native transfer whose
   // transfer_id is the lower 6 bytes of keccak256(godId | question | answer |
   // settle_tx_hash). Anyone who knows those four can recompute the hash and
-  // find the matching transfer on cspr.live. We only attempt this when there's
-  // a real settle tx to bind to; the bearer-demo path skips it.
+  // find the matching transfer on testnet.cspr.live. We only attempt this when
+  // there's a real settle tx to bind to; the bearer-demo path skips it.
   let receipt: ConsultReceipt | null = null;
   if (paidViaX402?.settleTx) {
     try {

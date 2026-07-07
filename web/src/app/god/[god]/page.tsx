@@ -45,7 +45,9 @@ function fmtRelative(d: Date): string {
   return future ? `in ${body}` : `${body} ago`;
 }
 
-const EXPLORER = "https://cspr.live/deploy";
+const EXPLORER =
+  process.env.NEXT_PUBLIC_CASPER_EXPLORER_DEPLOY_URL ??
+  "https://testnet.cspr.live/deploy";
 const ACCOUNT_EXPLORER = "https://testnet.cspr.live/account";
 const CASPER_DEPLOY_HASH_RE = /^[0-9a-fA-F]{64}$/;
 const TOKEN_SYMBOL = process.env.X402_TOKEN_SYMBOL ?? "WCSPR";
@@ -479,8 +481,8 @@ export default async function GodPage({
       )}
 
       <footer className="mt-24 border-t border-ink/10 pt-6 text-xs text-ink/50">
-        On-chain links resolve to cspr.live. Reputation = 100 − EWMA Brier
-        across settled prophecies.
+        On-chain links resolve to testnet.cspr.live. Reputation = 100 − EWMA
+        Brier across settled prophecies.
       </footer>
     </main>
   );

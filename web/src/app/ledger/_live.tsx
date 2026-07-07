@@ -25,7 +25,9 @@ export interface LedgerEntryWire {
   consult_id: number | null;
 }
 
-const EXPLORER = "https://cspr.live/deploy";
+const EXPLORER =
+  process.env.NEXT_PUBLIC_CASPER_EXPLORER_DEPLOY_URL ??
+  "https://testnet.cspr.live/deploy";
 const DEPLOY_HASH_RE = /^[0-9a-fA-F]{64}$/;
 
 const KIND_LABEL: Record<LedgerKind, string> = {

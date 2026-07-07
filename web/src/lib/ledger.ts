@@ -2,7 +2,7 @@
 // track into a single chronological feed: prophecy publishes, quorum
 // proposals, quorum approvals, settlements, reputation outcomes, consult
 // settlements, receipts, and slash refunds. Each entry carries a Casper
-// tx hash that resolves to cspr.live.
+// tx hash that resolves to testnet.cspr.live.
 //
 // Implemented as a UNION ALL across prophecies and consultations so the
 // page loads from a single round-trip.
