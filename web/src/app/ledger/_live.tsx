@@ -26,9 +26,9 @@ export interface LedgerEntryWire {
 }
 
 const EXPLORER =
-  process.env.NEXT_PUBLIC_CASPER_EXPLORER_DEPLOY_URL ??
-  "https://testnet.cspr.live/deploy";
-const DEPLOY_HASH_RE = /^[0-9a-fA-F]{64}$/;
+  process.env.NEXT_PUBLIC_CASPER_EXPLORER_TRANSACTION_URL ??
+  "https://testnet.cspr.live/transaction";
+const TX_HASH_RE = /^[0-9a-fA-F]{64}$/;
 
 const KIND_LABEL: Record<LedgerKind, string> = {
   publish: "publish",
@@ -74,7 +74,7 @@ function short(hash: string): string {
 }
 
 function DeployLink({ hash }: { hash: string }) {
-  if (!DEPLOY_HASH_RE.test(hash)) {
+  if (!TX_HASH_RE.test(hash)) {
     return (
       <span className="font-mono text-[11px] text-ink/30">
         unverified

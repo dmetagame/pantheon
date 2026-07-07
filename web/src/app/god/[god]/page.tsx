@@ -46,10 +46,10 @@ function fmtRelative(d: Date): string {
 }
 
 const EXPLORER =
-  process.env.NEXT_PUBLIC_CASPER_EXPLORER_DEPLOY_URL ??
-  "https://testnet.cspr.live/deploy";
+  process.env.NEXT_PUBLIC_CASPER_EXPLORER_TRANSACTION_URL ??
+  "https://testnet.cspr.live/transaction";
 const ACCOUNT_EXPLORER = "https://testnet.cspr.live/account";
-const CASPER_DEPLOY_HASH_RE = /^[0-9a-fA-F]{64}$/;
+const CASPER_TX_HASH_RE = /^[0-9a-fA-F]{64}$/;
 const TOKEN_SYMBOL = process.env.X402_TOKEN_SYMBOL ?? "WCSPR";
 const TOKEN_DECIMALS = parseInt(process.env.X402_TOKEN_DECIMALS ?? "9", 10);
 
@@ -295,7 +295,7 @@ function ConsultationCard({ c }: { c: ConsultationRow }) {
 }
 
 function TxLink({ label, hash }: { label: string; hash: string }) {
-  if (!CASPER_DEPLOY_HASH_RE.test(hash)) return null;
+  if (!CASPER_TX_HASH_RE.test(hash)) return null;
   return (
     <a
       href={`${EXPLORER}/${hash}`}
