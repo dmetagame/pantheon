@@ -36,7 +36,7 @@ const SLASH_RECIPIENTS_MAX = parseInt(
   10,
 );
 const SETTLE_PROPOSAL_CONFIRM_TIMEOUT_MS = parseInt(
-  process.env.SETTLE_PROPOSAL_CONFIRM_TIMEOUT_MS ?? "240000",
+  process.env.SETTLE_PROPOSAL_CONFIRM_TIMEOUT_MS ?? "120000",
   10,
 );
 
@@ -45,7 +45,9 @@ export const maxDuration = 300;
 
 // We claim and finalise one prophecy per cron invocation. A full settle
 // pipeline is four on-chain calls (propose → approve → settle → reputation
-// outcome) plus a ProposalCreated event poll: ~60–120s on testnet.
+// outcome) plus a ProposalCreated event poll: ~60–120s on testnet. Keep the
+// proposal-id poll under the 290s GitHub Actions curl and 300s Vercel cap;
+// partial progress is persisted and resumes on the next tick.
 // Vercel cron fires settle every 15 minutes; that pace is more than enough
 // for the daily prophesy load.
 //

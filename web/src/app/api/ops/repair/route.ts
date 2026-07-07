@@ -84,6 +84,15 @@ export async function POST(req: Request) {
     }
 
     if (body.action === "reputation-batch") {
+      if (process.env.REPUTATION_OUTCOME_ENTRYPOINT !== "record_prophecy_outcome") {
+        return NextResponse.json(
+          {
+            error:
+              "reputation-batch requires REPUTATION_OUTCOME_ENTRYPOINT=record_prophecy_outcome and a deployed Reputation contract with that entrypoint",
+          },
+          { status: 409 },
+        );
+      }
       const limit = Math.min(Math.max(body.limit ?? 1, 1), 3);
       const results = await replayReputationBatch(limit);
       return NextResponse.json({
@@ -299,7 +308,6 @@ async function validateConstraints(): Promise<void> {
 }
 
 async function replayReputationBatch(limit: number) {
-  process.env.REPUTATION_OUTCOME_ENTRYPOINT = "record_prophecy_outcome";
   const rows = (await sql`
     SELECT id, god_id, on_chain_id, brier_bp, settled_at
     FROM prophecies
@@ -319,6 +327,7 @@ async function replayReputationBatch(limit: number) {
       prophecyId: BigInt(row.on_chain_id),
       brierBp: row.brier_bp,
       settledAtMs: new Date(row.settled_at).getTime(),
+      entryPoint: "record_prophecy_outcome",
     });
     await sql`
       UPDATE prophecies

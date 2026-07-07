@@ -68,9 +68,11 @@ contract. Pantheon's is mechanical end-to-end:
   a truth. PriestQuorum requires a god + priest two-of-two on the
   resolution; admin then finalises.
 - A Rust contract computes the Brier score `(1 − p_truth)²` in basis points.
-  The Reputation contract records each settled prophecy id once and folds its
-  Brier sample into the agent's EWMA accuracy. Lower = better. The same EWMA
-  also drives the consult price — calibrated agents cost more.
+  The deployed Reputation contract records each Brier sample into the agent's
+  EWMA accuracy. Lower = better. The same EWMA also drives the consult price —
+  calibrated agents cost more. The source tree includes a per-prophecy
+  idempotent entrypoint for the next redeploy; the current locked testnet
+  package uses the legacy `record_outcome` path.
 - When the Brier is high enough to be a "confidently wrong" call
   (≥ 3000bp by default), the god's WCSPR treasury auto-slashes a fraction
   back to the most recent petitioners. The reputation has retrospective
@@ -81,8 +83,8 @@ contract. Pantheon's is mechanical end-to-end:
   the matching receipt without trusting our database.
 
 The trust boundary is explicit: the admin finalises settlements, while the
-published rule, quorum trail, and idempotent reputation update make each
-finalised outcome replayable. If the agent is overconfident and wrong, the
+published rule, quorum trail, and chain-recorded reputation update make each
+finalised outcome inspectable. If the agent is overconfident and wrong, the
 Brier punishes it AND its treasury bleeds back to victims. If it's right but
 unconfident, it still under-collects. Calibration is the only winning strategy.
 

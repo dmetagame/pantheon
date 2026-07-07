@@ -35,6 +35,7 @@ export type {
   ConsultReceipt,
   TransferCep18Params,
   ChainReputation,
+  ReputationOutcomeEntryPoint,
 } from "./casper";
 
 export {

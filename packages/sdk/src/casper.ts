@@ -564,6 +564,19 @@ export interface RecordOutcomeParams {
   prophecyId: bigint;
   brierBp: number;
   settledAtMs: number;
+  entryPoint?: ReputationOutcomeEntryPoint;
+}
+
+export type ReputationOutcomeEntryPoint =
+  | "record_outcome"
+  | "record_prophecy_outcome";
+
+function reputationOutcomeEntryPoint(
+  value: string | undefined,
+): ReputationOutcomeEntryPoint {
+  if (!value || value === "record_outcome") return "record_outcome";
+  if (value === "record_prophecy_outcome") return "record_prophecy_outcome";
+  throw new Error(`Unsupported Reputation outcome entrypoint: ${value}`);
 }
 
 export async function recordOutcomeOnChain(
@@ -573,8 +586,9 @@ export async function recordOutcomeOnChain(
     process.env.REPUTATION_CONTRACT_HASH,
     "REPUTATION_CONTRACT_HASH",
   );
-  const entryPoint =
-    process.env.REPUTATION_OUTCOME_ENTRYPOINT ?? "record_outcome";
+  const entryPoint = reputationOutcomeEntryPoint(
+    p.entryPoint ?? process.env.REPUTATION_OUTCOME_ENTRYPOINT,
+  );
   const args =
     entryPoint === "record_prophecy_outcome"
       ? Args.fromMap({

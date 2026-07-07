@@ -42,7 +42,7 @@ async function main(): Promise<void> {
 
   if (process.env.REPUTATION_OUTCOME_ENTRYPOINT !== "record_prophecy_outcome") {
     throw new Error(
-      "Set REPUTATION_OUTCOME_ENTRYPOINT=record_prophecy_outcome before running; replaying without prophecy-id idempotency is unsafe.",
+      "Set REPUTATION_OUTCOME_ENTRYPOINT=record_prophecy_outcome only after deploying a Reputation contract with that entrypoint; replaying against the legacy locked contract is unsafe.",
     );
   }
 
@@ -94,6 +94,7 @@ async function main(): Promise<void> {
           prophecyId: BigInt(row.on_chain_id),
           brierBp: row.brier_bp,
           settledAtMs: new Date(row.settled_at).getTime(),
+          entryPoint: "record_prophecy_outcome",
         });
         await sql`
           UPDATE prophecies

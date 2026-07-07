@@ -68,7 +68,7 @@ Every action is signed by one of the configured Casper accounts:
 | Hermes | `017d96d6…` | publish, propose, refund |
 | Apollo | `01aea6e8…` | publish, propose, refund |
 | Per-god priests | `PRIEST_<GOD>_PUBLIC_KEY` | approve (quorum co-signer) |
-| Admin | `020372ac…` | register_god, settle, record_outcome / record_prophecy_outcome, set_priesthood |
+| Admin | `020372ac…` | register_god, settle, record_outcome, set_priesthood |
 | Petitioner / receipt signer | `0202cab0…` | x402 TransferWithAuthorization, receipt transfer |
 
 ## Contracts
@@ -89,6 +89,12 @@ variant to carry the SettleProphecy payload (bytesrepr-encoded
 to that only when `PRIEST_QUORUM_PROPOSE_MODE=typed` is set after a matching
 contract redeploy. The deployed generic encoding is semantically identical
 and keeps production compatible with the current package.
+
+The live Reputation package is the locked v1 deployment and uses
+`record_outcome`. The source tree includes `record_prophecy_outcome`, which
+adds per-prophecy idempotency, but that guard is not active until a fresh
+Reputation package is deployed and the app is pointed at the new hash with
+`REPUTATION_OUTCOME_ENTRYPOINT=record_prophecy_outcome`.
 
 ## Reputation math
 
@@ -196,10 +202,12 @@ pantheon/
 | `/api/cron/settle` | `*/15 * * * *` | Resolve claimable due prophecies, slash if Brier ≥ 3000bp |
 | `/api/cron/sweep` | `*/30 * * * *` | Backfill `on_chain_id` for rows whose publish event we missed |
 
-The settle cron is idempotent across crashes: each of its four chain-call
-steps + the closing UPDATE is persisted separately so a re-run from a
-mid-pipeline state skips the steps that already landed. See
-`web/src/app/api/cron/settle/route.ts`.
+The settle cron is idempotent across crashes at the application layer: each
+chain-call step + the closing UPDATE is persisted separately so a re-run from
+a mid-pipeline state skips the steps that already landed. The deployed
+Reputation contract itself is still the legacy non-idempotent v1 entrypoint;
+per-prophecy contract-level idempotency requires the fresh Reputation redeploy
+described above. See `web/src/app/api/cron/settle/route.ts`.
 
 Vercel Hobby hosts the app. High-cadence settle/sweep calls are driven from
 GitHub Actions and hit these same authenticated endpoints with

@@ -77,22 +77,26 @@ ALTER TABLE consultations VALIDATE CONSTRAINT consultations_refund_tx_hash_forma
 
 ### Reputation Repair
 
-After deploying the updated Reputation contract, set:
+The current live Reputation package is locked v1 and uses `record_outcome`.
+Do not replay settled history against that package: the legacy entrypoint is
+not prophecy-idempotent and would double-count samples. Only use the replay
+flow after deploying a fresh Reputation package that exposes
+`record_prophecy_outcome`, then set:
 
 ```sh
 REPUTATION_OUTCOME_ENTRYPOINT=record_prophecy_outcome
 ```
 
-If the configured Reputation contract is fresh or currently reads zero while
-the DB contains settled history, replay all settled outcomes:
+If the configured Reputation contract is that fresh package and currently
+reads zero while the DB contains settled history, replay all settled outcomes:
 
 ```sh
 cd web
 REPLAY_ALL_REPUTATION=1 pnpm reputation:reconcile
 ```
 
-For normal future recovery, omit `REPLAY_ALL_REPUTATION`; the script only
-records rows that are missing a reputation tx/backfill marker.
+For normal future recovery on the fresh package, omit `REPLAY_ALL_REPUTATION`;
+the script only records rows that are missing a reputation tx/backfill marker.
 
 ### Settlement Backlog
 
@@ -125,7 +129,8 @@ Already implemented in code in this pass:
 Frame the demo around the official rubric:
 
 - Technical execution: Rust/Odra contracts, typed SDK, cron settlement,
-  idempotent reputation, and live tx links.
+  application-level replay safety, chain-read reputation checks, and live tx
+  links.
 - Innovation: Brier-score reputation is a reusable primitive, not a chatbot.
 - Agentic AI: petitioner agent selects a god and pays via x402.
 - DeFi/RWA: Apollo covers macro/RWA signals; x402/WCSPR gives economic flow.
