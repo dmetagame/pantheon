@@ -19,7 +19,8 @@ interface VerifyResponse {
     receiptSignerAccountKey?: string | null;
   };
   match?: {
-    deployHash: string;
+    transactionHash?: string;
+    deployHash?: string;
     amount: string;
     initiator: string;
     recipient: string;
@@ -27,7 +28,9 @@ interface VerifyResponse {
   } | null;
 }
 
-const DEPLOY_URL = "https://cspr.live/deploy";
+const TRANSACTION_URL =
+  process.env.NEXT_PUBLIC_CASPER_EXPLORER_TRANSACTION_URL ??
+  "https://testnet.cspr.live/transaction";
 
 function shortHex(h: string): string {
   return h.length > 20 ? `${h.slice(0, 12)}…${h.slice(-8)}` : h;
@@ -96,6 +99,9 @@ export function VerifyForm() {
       setBusy(false);
     }
   }
+
+  const matchedTxHash =
+    result?.match?.transactionHash ?? result?.match?.deployHash;
 
   return (
     <section className="mt-8">
@@ -223,18 +229,18 @@ export function VerifyForm() {
                 <dt className="text-ink/45">transfer id</dt>
                 <dd>{result.expected.transferId}</dd>
               </div>
-              {result.match && (
+              {result.match && matchedTxHash && (
                 <>
                   <div className="flex flex-wrap gap-x-2">
-                    <dt className="text-ink/45">matched deploy</dt>
+                    <dt className="text-ink/45">matched transaction</dt>
                     <dd>
                       <a
-                        href={`${DEPLOY_URL}/${result.match.deployHash}`}
+                        href={`${TRANSACTION_URL}/${matchedTxHash}`}
                         target="_blank"
                         rel="noreferrer"
                         className="text-laurel underline-offset-2 hover:underline"
                       >
-                        {shortHex(result.match.deployHash)} ↗
+                        {shortHex(matchedTxHash)} ↗
                       </a>
                     </dd>
                   </div>

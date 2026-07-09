@@ -34,7 +34,9 @@ const SUGGESTED = [
   "Will USDC hold its dollar peg above $0.9995 through tomorrow?",
 ];
 
-const DEPLOY_URL = "https://cspr.live/deploy";
+const TRANSACTION_URL =
+  process.env.NEXT_PUBLIC_CASPER_EXPLORER_TRANSACTION_URL ??
+  "https://testnet.cspr.live/transaction";
 const ACCOUNT_URL = "https://testnet.cspr.live/account";
 
 function fmtMotes(motes?: string): string {
@@ -250,7 +252,7 @@ export function PetitionConsole() {
                     <dt className="text-ink/45">x402 settle</dt>
                     <dd>
                       <a
-                        href={`${DEPLOY_URL}/${proof.paymentSettleTx}`}
+                        href={`${TRANSACTION_URL}/${proof.paymentSettleTx}`}
                         target="_blank"
                         rel="noreferrer"
                         className="text-laurel underline-offset-2 hover:underline"
@@ -268,7 +270,7 @@ export function PetitionConsole() {
                     <dt className="text-ink/45">receipt</dt>
                     <dd>
                       <a
-                        href={`${DEPLOY_URL}/${proof.receiptTxHash}`}
+                        href={`${TRANSACTION_URL}/${proof.receiptTxHash}`}
                         target="_blank"
                         rel="noreferrer"
                         className="text-laurel underline-offset-2 hover:underline"

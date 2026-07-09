@@ -22,7 +22,7 @@ import { enforceRateLimit } from "@/lib/rate-limit";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const CASPER_DEPLOY_HASH_RE = /^[0-9a-fA-F]{64}$/;
+const CASPER_TX_HASH_RE = /^[0-9a-fA-F]{64}$/;
 const MAX_QUESTION_CHARS = 2_000;
 const MAX_ANSWER_CHARS = 20_000;
 
@@ -81,9 +81,9 @@ export async function POST(req: Request) {
   }
 
   const cleanSettleTxHash = settleTxHash.trim();
-  if (!CASPER_DEPLOY_HASH_RE.test(cleanSettleTxHash)) {
+  if (!CASPER_TX_HASH_RE.test(cleanSettleTxHash)) {
     return NextResponse.json(
-      { error: "settleTxHash must be a 64-character Casper deploy hash" },
+      { error: "settleTxHash must be a 64-character Casper transaction hash" },
       { status: 400, headers: rlHeaders },
     );
   }
@@ -161,6 +161,7 @@ export async function POST(req: Request) {
     },
     match: match
       ? {
+          transactionHash: match.deploy_hash,
           deployHash: match.deploy_hash,
           amount: match.amount,
           initiator: match.initiator_account_hash,

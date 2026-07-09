@@ -154,7 +154,7 @@ export function createServer(): McpServer {
       "inputs (godId, question, answer, x402 settle tx hash), recomputes the " +
       "keccak256 receipt hash, derives the expected on-chain transfer-id, and " +
       "searches the god's recent native transfers for a match. Returns " +
-      "verified=true with the matching deploy hash when the receipt was bound " +
+      "verified=true with the matching transaction hash when the receipt was bound " +
       "on chain, false otherwise. Anyone can run this; no DB trust required.",
     {
       godId: z.enum(GOD_IDS),

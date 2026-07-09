@@ -33,6 +33,8 @@ export interface PetitionConfig {
   x402?: boolean;
   /** Hackathon bearer fallback used when x402 is off. */
   consultSecret?: string;
+  /** Hard cap on consult_god calls a single autonomous run may perform. */
+  maxPaidConsults?: number;
   /** Receives every transcript event as it happens. */
   onEvent?: (e: PetitionEvent) => void;
 }
@@ -44,6 +46,14 @@ export type PetitionEvent =
   | { type: "final"; text: string }
   | { type: "proof"; proof: ConsultOutcome };
 
+function positiveInt(value: number | string | undefined, fallback: number): number {
+  const n =
+    typeof value === "number"
+      ? value
+      : parseInt(value ?? String(fallback), 10);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
 function resolveConfig(cfg?: PetitionConfig): Required<PetitionConfig> {
   return {
     apiBase:
@@ -51,6 +61,10 @@ function resolveConfig(cfg?: PetitionConfig): Required<PetitionConfig> {
     x402: cfg?.x402 ?? process.env.PETITIONER_X402 === "1",
     consultSecret:
       cfg?.consultSecret ?? process.env.PANTHEON_CONSULT_SECRET ?? "",
+    maxPaidConsults: positiveInt(
+      cfg?.maxPaidConsults ?? process.env.PETITIONER_MAX_PAID_CONSULTS,
+      1,
+    ),
     onEvent: cfg?.onEvent ?? (() => {}),
   };
 }
@@ -58,7 +72,8 @@ function resolveConfig(cfg?: PetitionConfig): Required<PetitionConfig> {
 // ─── tools the petitioner can call ────────────────────────────────────────
 
 function makeTools(cfg: Required<PetitionConfig>) {
-  const { apiBase, x402, consultSecret } = cfg;
+  const { apiBase, x402, consultSecret, maxPaidConsults } = cfg;
+  let consultCalls = 0;
   return {
     list_pantheon: tool({
       description:
@@ -98,6 +113,16 @@ function makeTools(cfg: Required<PetitionConfig>) {
           .describe("The question to ask. One sentence works best."),
       }),
       execute: async ({ godId, question }) => {
+        if (consultCalls >= maxPaidConsults) {
+          const noun = maxPaidConsults === 1 ? "consult" : "consults";
+          return {
+            blocked: true,
+            paid: false,
+            hint: `This petitioner run is capped at ${maxPaidConsults} paid ${noun}. Pick one god and finish from the evidence already gathered.`,
+          };
+        }
+        consultCalls += 1;
+
         const url = `${apiBase}/api/consult/${godId}`;
         const body = JSON.stringify({ question });
 
@@ -283,8 +308,18 @@ export interface ConsultOutcome {
   answer?: string;
 }
 
+function scoreboardGods(value: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) return value as Array<Record<string, unknown>>;
+  if (value && typeof value === "object") {
+    const gods = (value as { gods?: unknown }).gods;
+    if (Array.isArray(gods)) return gods as Array<Record<string, unknown>>;
+  }
+  return [];
+}
+
 function extractConsultOutcome(steps: StepLike[]): ConsultOutcome {
   const out: ConsultOutcome = {};
+  let listedGods: Array<Record<string, unknown>> = [];
   for (const step of steps) {
     for (const tc of step.toolCalls ?? []) {
       if (tc.toolName === "consult_god") {
@@ -313,14 +348,15 @@ function extractConsultOutcome(steps: StepLike[]): ConsultOutcome {
         }
         out.payer = (r.signedAs as string | undefined) ?? out.payer;
       }
-      if (tr.toolName === "list_pantheon" && Array.isArray(r)) {
-        const list = r as Array<Record<string, unknown>>;
-        for (const g of list) {
-          if (out.god && g.id === out.god) {
-            out.reputationBp = Number(g.reputationBp ?? 0);
-          }
-        }
+      if (tr.toolName === "list_pantheon") {
+        listedGods = scoreboardGods(r);
       }
+    }
+  }
+  if (out.god) {
+    const god = listedGods.find((g) => String(g.id ?? "") === out.god);
+    if (god && god.reputationBp !== undefined) {
+      out.reputationBp = Number(god.reputationBp);
     }
   }
   return out;
