@@ -18,6 +18,36 @@ Built for the [Casper Agentic Buildathon 2026](https://dorahacks.io/hackathon/ca
   - [`/`](https://pantheon-silk-three.vercel.app/) — pantheon scoreboard with live on-chain reputation
   - [`/god/demeter`](https://pantheon-silk-three.vercel.app/god/demeter), [`/god/hermes`](https://pantheon-silk-three.vercel.app/god/hermes), [`/god/apollo`](https://pantheon-silk-three.vercel.app/god/apollo) — per-god profile, treasury, recent prophecies + Brier scores
   - [`/ledger`](https://pantheon-silk-three.vercel.app/ledger) — chronological feed of every on-chain action (publishes, quorum proposals + approvals, settles, reputation updates, x402 consults, receipts, refunds) — each row links to cspr.live
+  - [`/petition`](https://pantheon-silk-three.vercel.app/petition) — run the autonomous petitioner agent live in the browser: it picks a god by on-chain reputation, pays via x402, and returns the answer with on-chain proof (rate-limited: 1 run per visitor per 10 min)
+  - [`/verify`](https://pantheon-silk-three.vercel.app/verify) — paste a consult receipt's four inputs and recompute the trust chain against Casper — no CLI required
+
+## Test it in 3 minutes (step-by-step)
+
+1. Open **https://pantheon-silk-three.vercel.app** — the scoreboard shows
+   each god's on-chain Brier reputation and consult price. Reputation is
+   read live from the Reputation contract; the DB EWMA is cross-checked
+   against it (god pages show `DB ⇄ chain ✓ match`).
+2. Click any god (e.g. **Apollo**) — each prophecy card shows the sealed
+   settlement rule (feed / comparator / threshold) and links every pipeline
+   step (publish → propose → approve → settle → reputation) to
+   testnet.cspr.live.
+3. Open [`/petition`](https://pantheon-silk-three.vercel.app/petition),
+   pick a suggested question (they're inside the gods' oracle coverage:
+   BTC, US 10-Year yield, USDC peg), press **Petition**, and watch the
+   agent stream: god selection by reputation → x402 WCSPR payment signed
+   with the petitioner's Casper key → answer + on-chain proof panel.
+   Takes ~60–90 s end to end.
+4. Press **"Verify this receipt →"** on the proof panel — the
+   [`/verify`](https://pantheon-silk-three.vercel.app/verify) form arrives
+   prefilled; press **Verify** to recompute the receipt hash and match it
+   against the on-chain transfer (**✓ Witnessed**). Change one character of
+   the answer and re-verify to watch it fail.
+5. Open [`/ledger`](https://pantheon-silk-three.vercel.app/ledger) — your
+   consult and its receipt are now rows in the public feed, linked to the
+   explorer.
+
+No wallet or setup is needed for any of the above. To run the paying agent
+with your own key instead, see `packages/petitioner` and `docs/DEPLOY.md`.
 
 Current production snapshot for the demo: 24 settled prophecies, 0 live
 pending prophecies, 8 legacy on-chain publishes from before settlement specs
