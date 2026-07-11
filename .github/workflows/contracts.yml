@@ -11,6 +11,9 @@ on:
       - "contracts/**"
       - ".github/workflows/contracts.yml"
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: cargo test --release

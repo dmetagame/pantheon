@@ -35,6 +35,9 @@ on:
 env:
   APP_URL: https://pantheon-silk-three.vercel.app
 
+permissions:
+  contents: read
+
 jobs:
   ping:
     runs-on: ubuntu-latest

@@ -31,6 +31,17 @@ function positiveInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+/**
+ * Configuration-only base URL for the agent's self-calls. Priority:
+ * explicit override → Vercel's canonical production domain → local dev.
+ */
+function petitionApiBase(): string {
+  if (process.env.PETITION_API_URL) return process.env.PETITION_API_URL;
+  const prodHost = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  if (prodHost) return `https://${prodHost}`;
+  return `http://localhost:${process.env.PORT ?? "3000"}`;
+}
+
 function ensurePetitionRunsSchema(): Promise<void> {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -153,11 +164,12 @@ export async function POST(req: Request) {
     );
   }
 
-  // The agent's tools call back into this same deployment. The request's
-  // own origin is the only base that's correct in every environment
-  // (localhost, preview, prod); PETITION_API_URL exists as an escape hatch.
-  const apiBase =
-    process.env.PETITION_API_URL ?? new URL(req.url).origin;
+  // The agent's tools call back into this same deployment. The base URL is
+  // derived from configuration only — never from the request — because the
+  // consult tool signs an x402 payment against whatever 402 envelope that
+  // base returns; a Host-header-derived origin would let a spoofed request
+  // aim the petitioner's signed payment at an attacker-controlled server.
+  const apiBase = petitionApiBase();
 
   log.info("petition.start", { client, runId, question: question.slice(0, 120) });
 
